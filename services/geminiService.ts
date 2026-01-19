@@ -7,14 +7,14 @@ export const generateBotResponse = async (
   history: string[] = []
 ): Promise<string> => {
   try {
-    // Attempt to get the key from process.env (injected by Vite define or Node)
-    // Fallback to import.meta.env.VITE_API_KEY for standard Vite runtime behavior
+    // With the updated vite.config.ts, process.env.API_KEY is guaranteed to be replaced by a string literal.
+    // We check it, and also fallback to import.meta.env for VITE_API_KEY just in case the build config didn't catch it but runtime does.
     const apiKey = process.env.API_KEY || (import.meta as any).env?.VITE_API_KEY;
 
     // Strict check for empty string or undefined
     if (!apiKey || apiKey.trim() === '') {
-      console.warn("GeminiService: API_KEY is missing. Check your .env file for API_KEY or VITE_API_KEY.");
-      return "⚠️ Configuration Error: API_KEY is missing. Please add `VITE_API_KEY=your_key` to your .env file.";
+      console.warn("GeminiService: API_KEY is missing. Please set API_KEY or VITE_API_KEY in your .env file.");
+      return "⚠️ Configuration Error: API_KEY is missing. Please add `API_KEY=your_key` or `VITE_API_KEY=your_key` to your .env file.";
     }
 
     const ai = new GoogleGenAI({ apiKey: apiKey });
