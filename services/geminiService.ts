@@ -7,19 +7,20 @@ export const generateBotResponse = async (
   history: string[] = []
 ): Promise<string> => {
   try {
-    // 1. Try process.env (injected by Vite define)
-    let apiKey = process.env.API_KEY || process.env.VITE_API_KEY;
+    // 1. Try process.env (Standard Node/Vite injected)
+    // We check safely to ensure we don't crash if process is somehow undefined
+    let apiKey = typeof process !== 'undefined' ? process.env?.API_KEY : undefined;
 
-    // 2. Try import.meta.env (Vite standard)
-    if (!apiKey || apiKey.trim() === '') {
-       const metaEnv = (import.meta as any).env;
-       if (metaEnv) {
-           apiKey = metaEnv.VITE_API_KEY || metaEnv.API_KEY;
-       }
+    // 2. Try Vite's import.meta.env (for VITE_ prefixed keys)
+    if (!apiKey) {
+       try {
+         // @ts-ignore
+         apiKey = import.meta.env?.VITE_API_KEY || import.meta.env?.API_KEY;
+       } catch (e) {}
     }
 
-    // 3. Last resort: window object
-    if ((!apiKey || apiKey.trim() === '') && typeof window !== 'undefined') {
+    // 3. Try Global Window (Browser Runtime Injection - often used in cloud previews)
+    if (!apiKey && typeof window !== 'undefined') {
         const win = window as any;
         apiKey = win.API_KEY || win.VITE_API_KEY || win.process?.env?.API_KEY;
     }
@@ -27,7 +28,8 @@ export const generateBotResponse = async (
     // Strict check for empty string or undefined
     if (!apiKey || apiKey.trim() === '') {
       console.warn("GeminiService: API_KEY is missing.");
-      return "⚠️ Configuration Error: API_KEY is missing. Please add `VITE_API_KEY=your_key` to your .env file and restart the dev server.";
+      // Return a friendly in-chat error instead of crashing the app logic
+      return "⚠️ Configuration Error: My API_KEY is missing! Please add `API_KEY` to your .env file.";
     }
 
     const ai = new GoogleGenAI({ apiKey: apiKey });
