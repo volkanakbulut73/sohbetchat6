@@ -11,6 +11,7 @@ export const generateBotResponse = async (
     // Debug log to help identify if key is missing during runtime
     if (!process.env.API_KEY) {
       console.error("GeminiService: API_KEY is missing from process.env. Make sure .env is set and Vite is reloading.");
+      return "⚠️ HATA: API Key bulunamadı! Lütfen .env dosyanıza API_KEY ekleyin.";
     }
 
     // Coding Guidelines: API key must be obtained exclusively from process.env.API_KEY
@@ -28,9 +29,10 @@ export const generateBotResponse = async (
       }
     });
 
-    return response.text || "I'm feeling a bit glitchy today 🤖... try again?";
-  } catch (error) {
+    return response.text || "Biraz kafam karıştı 🤖... tekrar dener misin?";
+  } catch (error: any) {
     console.error("Gemini API Error:", error);
-    return "Oof! My brain circuits are overloaded. (API Error)";
+    // Return the actual error message to help the user debug
+    return `Oof! Beyin devrelerim yandı. (Hata: ${error.message || 'Bilinmiyor'})`;
   }
 };

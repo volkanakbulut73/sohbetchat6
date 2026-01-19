@@ -150,8 +150,11 @@ const MusicPlayer: React.FC = () => {
 
   const handleStreamError = (e: any) => {
       if (!error) {
-          console.warn("Stream error for URL:", audioUrl);
-          setError("Yayın Çevrimdışı");
+          // Only warn if we actually have a URL that failed
+          if (audioUrl) {
+            console.warn("Stream error for URL:", audioUrl);
+            setError("Yayın Çevrimdışı");
+          }
           setIsPlaying(false);
       }
   };
@@ -164,7 +167,7 @@ const MusicPlayer: React.FC = () => {
       <audio 
         key={audioUrl}
         ref={audioRef} 
-        src={audioUrl} 
+        src={audioUrl || undefined} 
         onEnded={handleNext} 
         onError={handleStreamError}
         preload="none"
