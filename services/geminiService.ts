@@ -3,27 +3,19 @@ import { GEMINI_MODEL } from "../constants";
 
 /**
  * Helper to retrieve the API Key from various possible injection points.
- * Checks process.env, Vite's import.meta.env, and the global window object.
+ * Checks process.env.API_KEY.
  */
 export const getApiKey = (): string | undefined => {
-  // 1. Try safe process.env access using bracket notation to bypass some bundler replacements
-  let key = typeof process !== 'undefined' ? process.env?.['API_KEY'] : undefined;
+  // Build-time Replacement (process.env.API_KEY)
+  // CRITICAL: Must use DOT notation (process.env.API_KEY) for Vite to replace it with the string literal.
+  // Using process.env['API_KEY'] prevents replacement and fails in production.
+  try {
+    // @ts-ignore
+    const buildKey = process.env.API_KEY;
+    if (buildKey) return buildKey;
+  } catch {}
 
-  // 2. Try Standard Vite Injection
-  if (!key) {
-      try {
-        // @ts-ignore
-        key = import.meta.env?.VITE_API_KEY || import.meta.env?.API_KEY;
-      } catch {}
-  }
-
-  // 3. Try Global Window (Runtime Injection for Previews/AI Studio)
-  if (!key && typeof window !== 'undefined') {
-      const win = window as any;
-      key = win.API_KEY || win.VITE_API_KEY || win.process?.env?.API_KEY;
-  }
-  
-  return key;
+  return undefined;
 };
 
 // Stateless function that creates a client on the fly.
@@ -32,15 +24,17 @@ export const generateBotResponse = async (
   history: string[] = []
 ): Promise<string> => {
   try {
-    const apiKey = getApiKey();
+    // @ts-ignore
+    const apiKey = process.env.API_KEY;
 
     if (!apiKey || apiKey.trim() === '') {
       console.warn("GeminiService: API_KEY is missing.");
-      return "⚠️ Configuration Error: My API_KEY is missing! If you are in AI Studio, please click 'Select API Key' on the login screen, or add `API_KEY` to your .env file.";
+      return "⚠️ Configuration Error: My API_KEY is missing! If you are on Vercel, please add `VITE_API_KEY` to your Environment Variables and Redeploy.";
     }
 
     // Always create a fresh instance to ensure we use the latest key
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    // @ts-ignore
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     // Combine history and current prompt into the user content
     const limitedHistory = history.slice(-10);
