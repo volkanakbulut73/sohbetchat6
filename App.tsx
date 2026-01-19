@@ -213,8 +213,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         const password = 'password123';
         
         // 1. Try to create account first (Optimistic)
-        // We ignore errors here because if it fails, it usually means user exists,
-        // so we just fall through to the Auth step.
         try {
             await pb.collection('users').create({
                 username: usernameInput,
@@ -225,16 +223,20 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 banned: false
             });
         } catch (createError) {
-            // Ignore creation errors (likely "username taken")
+            // Check if error is specifically about unique constraint
+            // Proceed to login if user already exists
         }
         
         // 2. Authenticate
         try {
             await pb.collection('users').authWithPassword(usernameInput, password);
-        } catch (authError) {
-            // If auth fails after we potentially tried to create, it means password mismatch
-            // or the username is taken by someone else with a different password.
-            alert("Username taken or incorrect password.");
+        } catch (authError: any) {
+            console.error("Auth failed", authError);
+            if (authError.status === 400) {
+                 alert("Login failed: Username already taken by another user (password mismatch).");
+            } else {
+                 alert("Login failed: " + authError.message);
+            }
             setIsLoading(false);
             return;
         }
@@ -249,7 +251,10 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 return;
             }
 
-            await pb.collection('users').update(model.id, { isOnline: true });
+            // Update status to online
+            try {
+                await pb.collection('users').update(model.id, { isOnline: true });
+            } catch (e) { console.warn("Could not update online status", e); }
 
             setCurrentUser({
                 id: model.id,
@@ -274,7 +279,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         }
     } catch (e: any) {
         if (e?.message !== "The current and the previous request authorization don't match.") {
-            console.error(e);
+            console.error("Login process error:", e);
             alert("An unexpected error occurred during login.");
         }
     } finally {

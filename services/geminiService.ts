@@ -7,14 +7,14 @@ export const generateBotResponse = async (
   history: string[] = []
 ): Promise<string> => {
   try {
-    // The API key must be obtained exclusively from the environment variable process.env.API_KEY.
-    // This variable is injected by Vite at build time.
-    const apiKey = process.env.API_KEY;
+    // Attempt to get the key from process.env (injected by Vite define or Node)
+    // Fallback to import.meta.env.VITE_API_KEY for standard Vite runtime behavior
+    const apiKey = process.env.API_KEY || (import.meta as any).env?.VITE_API_KEY;
 
     // Strict check for empty string or undefined
     if (!apiKey || apiKey.trim() === '') {
-      console.error("GeminiService: API_KEY is missing. Please set API_KEY or VITE_API_KEY in your .env file.");
-      return "⚠️ Configuration Error: API_KEY is missing. Please add `API_KEY=your_key` to your .env file and restart.";
+      console.warn("GeminiService: API_KEY is missing. Check your .env file for API_KEY or VITE_API_KEY.");
+      return "⚠️ Configuration Error: API_KEY is missing. Please add `VITE_API_KEY=your_key` to your .env file.";
     }
 
     const ai = new GoogleGenAI({ apiKey: apiKey });
