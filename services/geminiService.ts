@@ -8,12 +8,12 @@ export const generateBotResponse = async (
   history: string[] = []
 ): Promise<string> => {
   try {
-    // Attempt to retrieve key. 
-    // We check window.process as a fallback for some browser environments where standard process.env might be shimmed differently.
-    const apiKey = process.env.API_KEY || (window as any).process?.env?.API_KEY;
+    // In Vite with the updated config, process.env.API_KEY is replaced with the string value at build time.
+    const apiKey = process.env.API_KEY;
 
     if (!apiKey) {
-      console.warn("GeminiService: API_KEY appears missing. Attempts to call API might fail if not injected by the platform.");
+      console.error("GeminiService: API_KEY is missing. Please check your .env file.");
+      return "⚠️ HATA: API Key yapılandırılmamış. Lütfen .env dosyasını kontrol edin.";
     }
 
     const ai = new GoogleGenAI({ apiKey: apiKey });
