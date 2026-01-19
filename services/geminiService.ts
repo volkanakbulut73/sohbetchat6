@@ -7,13 +7,22 @@ export const generateBotResponse = async (
   history: string[] = []
 ): Promise<string> => {
   try {
-    // With the updated vite.config.ts, process.env.API_KEY is guaranteed to be replaced by a string literal.
-    // We check it, and also fallback to import.meta.env for VITE_API_KEY just in case the build config didn't catch it but runtime does.
-    const apiKey = process.env.API_KEY || (import.meta as any).env?.VITE_API_KEY;
+    // Attempt to retrieve the API key from multiple potential sources
+    let apiKey: string | undefined = process.env.API_KEY;
+
+    // Check Vite-specific env vars if process.env.API_KEY is missing
+    if (!apiKey) {
+        apiKey = (import.meta as any).env?.VITE_API_KEY || (import.meta as any).env?.API_KEY;
+    }
+
+    // Check runtime global scope (e.g. injected by container or browser polyfill)
+    if (!apiKey && typeof window !== 'undefined') {
+        apiKey = (window as any).process?.env?.API_KEY;
+    }
 
     // Strict check for empty string or undefined
     if (!apiKey || apiKey.trim() === '') {
-      console.warn("GeminiService: API_KEY is missing. Please set API_KEY or VITE_API_KEY in your .env file.");
+      console.warn("GeminiService: API_KEY is missing.");
       return "⚠️ Configuration Error: API_KEY is missing. Please add `API_KEY=your_key` or `VITE_API_KEY=your_key` to your .env file.";
     }
 
