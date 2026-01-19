@@ -1,18 +1,30 @@
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
 
+const getApiKey = (): string | undefined => {
+  // 1. Check if Vite replaced it during build (or Node env)
+  // We use a safe check for 'process' to avoid ReferenceErrors in strict browser environments
+  if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+    return process.env.API_KEY;
+  }
+  // 2. Check explicit window polyfill (common in web containers/cloud IDEs)
+  if (typeof window !== 'undefined' && (window as any).process?.env?.API_KEY) {
+    return (window as any).process.env.API_KEY;
+  }
+  return undefined;
+};
+
 // Stateless function that creates a client on the fly.
 export const generateBotResponse = async (
   prompt: string, 
   history: string[] = []
 ): Promise<string> => {
   try {
-    // Access process.env.API_KEY which is injected by Vite
-    const apiKey = process.env.API_KEY;
+    const apiKey = getApiKey();
 
     // Strict check for empty string or undefined
     if (!apiKey || apiKey.trim() === '') {
-      console.error("GeminiService: API_KEY is missing/empty.");
+      console.error("GeminiService: API_KEY is missing/empty. Checked process.env and window.process.env.");
       return "⚠️ SYSTEM ERROR: API Key is missing. Please configure the API_KEY environment variable.";
     }
 
