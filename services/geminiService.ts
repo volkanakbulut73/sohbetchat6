@@ -2,21 +2,21 @@ import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
 
 // Stateless function that creates a client on the fly.
-// Accesses process.env.API_KEY directly which is injected by Vite at build time.
+// Accesses process.env.API_KEY directly.
 export const generateBotResponse = async (
   prompt: string, 
   history: string[] = []
 ): Promise<string> => {
   try {
-    // Debug log to help identify if key is missing during runtime
-    if (!process.env.API_KEY) {
-      console.error("GeminiService: API_KEY is missing from process.env. Make sure .env is set and Vite is reloading.");
-      return "⚠️ HATA: API Key bulunamadı! Lütfen .env dosyanıza API_KEY ekleyin.";
+    // Attempt to retrieve key. 
+    // We check window.process as a fallback for some browser environments where standard process.env might be shimmed differently.
+    const apiKey = process.env.API_KEY || (window as any).process?.env?.API_KEY;
+
+    if (!apiKey) {
+      console.warn("GeminiService: API_KEY appears missing. Attempts to call API might fail if not injected by the platform.");
     }
 
-    // Coding Guidelines: API key must be obtained exclusively from process.env.API_KEY
-    // and used directly in the constructor.
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: apiKey });
     
     // Combine history and current prompt into the user content
     const content = `Chat History:\n${history.join('\n')}\n\nUser: ${prompt}`;
@@ -32,7 +32,6 @@ export const generateBotResponse = async (
     return response.text || "Biraz kafam karıştı 🤖... tekrar dener misin?";
   } catch (error: any) {
     console.error("Gemini API Error:", error);
-    // Return the actual error message to help the user debug
     return `Oof! Beyin devrelerim yandı. (Hata: ${error.message || 'Bilinmiyor'})`;
   }
 };
