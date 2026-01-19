@@ -448,7 +448,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, geminiApiKey, classN
                           <Bot size={48} className="text-white" />
                       </div>
                   </div>
-                  <h1 className="text-2xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-mirc-pink to-mirc-purple">CuteMIRC AI</h1>
+                  <h1 className="text-2xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-mirc-pink to-mirc-purple">WorkigomChat AI</h1>
                   <p className="text-sm text-gray-400 mb-6 font-mono">Enter the retro-future chat.</p>
                   <div className="relative">
                       <input 
@@ -478,7 +478,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, geminiApiKey, classN
                       <div className="w-8 h-8 bg-gradient-to-br from-mirc-pink to-purple-500 rounded-lg flex items-center justify-center shrink-0">
                           <Command size={18} className="text-white" />
                       </div>
-                      <span className="font-bold text-lg hidden md:block">CuteMIRC</span>
+                      <span className="font-bold text-lg hidden md:block">WorkigomChat AI</span>
                   </div>
                   
                   <div className="relative group shrink-0 flex items-center gap-2">
