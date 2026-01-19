@@ -8,27 +8,29 @@ export const generateBotResponse = async (
   history: string[] = []
 ): Promise<string> => {
   try {
+    // Debug log to help identify if key is missing during runtime
+    if (!process.env.API_KEY) {
+      console.error("GeminiService: API_KEY is missing from process.env. Make sure .env is set and Vite is reloading.");
+    }
+
     // Coding Guidelines: API key must be obtained exclusively from process.env.API_KEY
     // and used directly in the constructor.
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
-    const context = `
-      You are a friendly, cute, and helpful AI assistant named Gemini AI inside a retro MIRC-style chatroom.
-      Keep your responses concise (under 300 characters if possible) to fit the chat flow.
-      Use emojis occasionally.
-      If the user asks for help, suggest using chat commands.
-    `;
-
-    const modelInput = `${context}\n\nChat History:\n${history.join('\n')}\n\nUser: ${prompt}`;
+    // Combine history and current prompt into the user content
+    const content = `Chat History:\n${history.join('\n')}\n\nUser: ${prompt}`;
 
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
-      contents: modelInput,
+      contents: content,
+      config: {
+        systemInstruction: "You are a friendly, cute, and helpful AI assistant named Gemini AI inside a retro MIRC-style chatroom. Keep your responses concise (under 300 characters if possible) to fit the chat flow. Use emojis occasionally. If the user asks for help, suggest using chat commands.",
+      }
     });
 
     return response.text || "I'm feeling a bit glitchy today 🤖... try again?";
   } catch (error) {
-    console.error("Gemini Error:", error);
+    console.error("Gemini API Error:", error);
     return "Oof! My brain circuits are overloaded. (API Error)";
   }
 };
