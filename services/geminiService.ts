@@ -2,20 +2,16 @@ import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
 
 /**
- * Helper to retrieve the API Key from various possible injection points.
- * Checks process.env.API_KEY.
+ * Helper to retrieve the API Key.
+ * Checks process.env.API_KEY which is replaced at build time.
  */
 export const getApiKey = (): string | undefined => {
-  // Build-time Replacement (process.env.API_KEY)
-  // CRITICAL: Must use DOT notation (process.env.API_KEY) for Vite to replace it with the string literal.
-  // Using process.env['API_KEY'] prevents replacement and fails in production.
   try {
     // @ts-ignore
-    const buildKey = process.env.API_KEY;
-    if (buildKey) return buildKey;
-  } catch {}
-
-  return undefined;
+    return process.env.API_KEY;
+  } catch {
+    return undefined;
+  }
 };
 
 // Stateless function that creates a client on the fly.
@@ -24,17 +20,16 @@ export const generateBotResponse = async (
   history: string[] = []
 ): Promise<string> => {
   try {
-    // @ts-ignore
-    const apiKey = process.env.API_KEY;
+    // Get the key using the robust helper function
+    const apiKey = getApiKey();
 
     if (!apiKey || apiKey.trim() === '') {
       console.warn("GeminiService: API_KEY is missing.");
-      return "⚠️ Configuration Error: My API_KEY is missing! If you are on Vercel, please add `VITE_API_KEY` to your Environment Variables and Redeploy.";
+      return "⚠️ Configuration Error: My API_KEY is missing! If you are on Vercel, please add `VITE_API_KEY` to your Environment Variables settings and Redeploy.";
     }
 
-    // Always create a fresh instance to ensure we use the latest key
-    // @ts-ignore
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // Initialize with the retrieved apiKey variable
+    const ai = new GoogleGenAI({ apiKey: apiKey });
     
     // Combine history and current prompt into the user content
     const limitedHistory = history.slice(-10);
