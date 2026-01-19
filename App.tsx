@@ -2,14 +2,14 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPocketBaseClient } from './services/pocketbase';
 import { MIRCProvider } from './context/MIRCContext';
 import { User, Room, Message, PrivateMessage, UserRole } from './types';
-import { BOT_NAME } from './constants';
-import { generateBotResponse } from './services/geminiService';
+import { BOT_NAME, DEFAULT_AVATAR } from './constants';
+import { generateBotResponse, getApiKey } from './services/geminiService';
 import MusicPlayer from './components/MusicPlayer';
 import UserList from './components/UserList';
 import ChatInput from './components/ChatInput';
 import MessageList from './components/MessageList';
 import PrivateChatWindow from './components/PrivateChatWindow';
-import { LogOut, Hash, Plus, Command, Bot, Users, Lock, Unlock, Loader2 } from 'lucide-react';
+import { LogOut, Hash, Plus, Command, Bot, Users, Lock, Unlock, Loader2, Key } from 'lucide-react';
 
 // Module Props Interface
 export interface CuteMIRCProps {
@@ -31,8 +31,10 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [showMobileUserList, setShowMobileUserList] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   
-  // Login State
+  // Login & API Key State
   const [usernameInput, setUsernameInput] = useState('');
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [showKeySelector, setShowKeySelector] = useState(false);
   
   // Private Chats
   const [activePMs, setActivePMs] = useState<User[]>([]);
@@ -41,6 +43,50 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // --- Helpers ---
   const isModerator = (user: User | null) => user?.role === UserRole.ADMIN || user?.role === UserRole.OPERATOR;
   const isAdmin = (user: User | null) => user?.role === UserRole.ADMIN;
+
+  // --- Check for API Key ---
+  useEffect(() => {
+    const checkKey = async () => {
+        // 1. Check if we have a key in env/window
+        const key = getApiKey();
+        if (key && key.trim() !== '') {
+            setHasApiKey(true);
+            return;
+        }
+
+        // 2. If no key, check if we are in AI Studio environment
+        const win = window as any;
+        if (win.aistudio) {
+            setShowKeySelector(true);
+            try {
+                const selected = await win.aistudio.hasSelectedApiKey();
+                if (selected) {
+                    setHasApiKey(true);
+                    setShowKeySelector(false);
+                }
+            } catch (e) {
+                console.log("Error checking AI Studio key", e);
+            }
+        }
+    };
+    checkKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+      const win = window as any;
+      if (win.aistudio) {
+          try {
+              await win.aistudio.openSelectKey();
+              // Assume success as per guidelines to avoid race conditions
+              setHasApiKey(true); 
+              setShowKeySelector(false);
+          } catch (e) {
+              console.error("Key selection failed", e);
+              // Retry
+              alert("Key selection failed. Please try again.");
+          }
+      }
+  };
 
   // --- Core Data Fetching ---
   const fetchUsers = useCallback(async () => {
@@ -469,6 +515,26 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   </div>
                   <h1 className="text-2xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-mirc-pink to-mirc-purple">WorkigomChat AI</h1>
                   <p className="text-sm text-gray-400 mb-6 font-mono">Enter the retro-future chat.</p>
+                  
+                  {/* API Key Missing Warning / Selector */}
+                  {!hasApiKey && (
+                      <div className="mb-6 p-3 bg-red-900/30 border border-red-500/50 rounded text-xs text-red-200">
+                          <p className="mb-2 font-bold flex items-center justify-center gap-1">⚠️ API Key Missing</p>
+                          {showKeySelector ? (
+                              <button 
+                                onClick={handleSelectKey}
+                                className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded flex items-center justify-center gap-2"
+                              >
+                                  <Key size={14} /> Select API Key
+                              </button>
+                          ) : (
+                              <p className="opacity-80">
+                                  Please add <code>VITE_API_KEY</code> to your .env file or environment variables.
+                              </p>
+                          )}
+                      </div>
+                  )}
+
                   <div className="relative">
                       <input 
                           type="text" 
@@ -631,7 +697,5 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     </MIRCProvider>
   );
 };
-
-const DEFAULT_AVATAR = 'https://ui-avatars.com/api/?background=random';
 
 export default CuteMIRC;

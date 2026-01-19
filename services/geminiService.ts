@@ -1,41 +1,48 @@
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
 
+/**
+ * Helper to retrieve the API Key from various possible injection points.
+ * Checks process.env, Vite's import.meta.env, and the global window object.
+ */
+export const getApiKey = (): string | undefined => {
+  // 1. Try safe process.env access using bracket notation to bypass some bundler replacements
+  let key = typeof process !== 'undefined' ? process.env?.['API_KEY'] : undefined;
+
+  // 2. Try Standard Vite Injection
+  if (!key) {
+      try {
+        // @ts-ignore
+        key = import.meta.env?.VITE_API_KEY || import.meta.env?.API_KEY;
+      } catch {}
+  }
+
+  // 3. Try Global Window (Runtime Injection for Previews/AI Studio)
+  if (!key && typeof window !== 'undefined') {
+      const win = window as any;
+      key = win.API_KEY || win.VITE_API_KEY || win.process?.env?.API_KEY;
+  }
+  
+  return key;
+};
+
 // Stateless function that creates a client on the fly.
 export const generateBotResponse = async (
   prompt: string, 
   history: string[] = []
 ): Promise<string> => {
   try {
-    // 1. Try process.env (Standard Node/Vite injected)
-    // We check safely to ensure we don't crash if process is somehow undefined
-    let apiKey = typeof process !== 'undefined' ? process.env?.API_KEY : undefined;
+    const apiKey = getApiKey();
 
-    // 2. Try Vite's import.meta.env (for VITE_ prefixed keys)
-    if (!apiKey) {
-       try {
-         // @ts-ignore
-         apiKey = import.meta.env?.VITE_API_KEY || import.meta.env?.API_KEY;
-       } catch (e) {}
-    }
-
-    // 3. Try Global Window (Browser Runtime Injection - often used in cloud previews)
-    if (!apiKey && typeof window !== 'undefined') {
-        const win = window as any;
-        apiKey = win.API_KEY || win.VITE_API_KEY || win.process?.env?.API_KEY;
-    }
-
-    // Strict check for empty string or undefined
     if (!apiKey || apiKey.trim() === '') {
       console.warn("GeminiService: API_KEY is missing.");
-      // Return a friendly in-chat error instead of crashing the app logic
-      return "⚠️ Configuration Error: My API_KEY is missing! Please add `API_KEY` to your .env file.";
+      return "⚠️ Configuration Error: My API_KEY is missing! If you are in AI Studio, please click 'Select API Key' on the login screen, or add `API_KEY` to your .env file.";
     }
 
+    // Always create a fresh instance to ensure we use the latest key
     const ai = new GoogleGenAI({ apiKey: apiKey });
     
     // Combine history and current prompt into the user content
-    // We limit history to avoid token limits in a simple implementation
     const limitedHistory = history.slice(-10);
     const content = `Previous Chat:\n${limitedHistory.join('\n')}\n\nUser: ${prompt}`;
 
