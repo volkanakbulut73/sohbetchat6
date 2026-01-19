@@ -16,7 +16,6 @@ root.render(
     <div style={{ width: '100vw', height: '100vh' }}>
         <CuteMIRC 
             pocketbaseUrl="https://api.workigomchat.online"
-            geminiApiKey={process.env.API_KEY} 
         />
     </div>
   </React.StrictMode>

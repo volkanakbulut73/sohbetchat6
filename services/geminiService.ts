@@ -1,19 +1,16 @@
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_MODEL } from "../constants";
 
-// Stateless function that creates a client on the fly or uses a passed instance logic if preferred.
-// For simplicity in this module, we instantiate per request or rely on the caller to manage rate limits.
+// Stateless function that creates a client on the fly.
+// Accesses process.env.API_KEY directly which is injected by Vite at build time.
 export const generateBotResponse = async (
   prompt: string, 
-  history: string[] = [],
-  apiKey?: string
+  history: string[] = []
 ): Promise<string> => {
-  if (!apiKey) {
-    return "I'm currently offline (API Key missing). 😴";
-  }
-
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    // Coding Guidelines: API key must be obtained exclusively from process.env.API_KEY
+    // and used directly in the constructor.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const context = `
       You are a friendly, cute, and helpful AI assistant named Gemini AI inside a retro MIRC-style chatroom.

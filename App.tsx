@@ -14,11 +14,10 @@ import { LogOut, Hash, Plus, Command, Bot, Users, Lock, Unlock, Loader2 } from '
 // Module Props Interface
 export interface CuteMIRCProps {
     pocketbaseUrl: string;
-    geminiApiKey?: string;
     className?: string;
 }
 
-const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, geminiApiKey, className }) => {
+const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // Initialize PocketBase Client for this instance
   const pb = useMemo(() => createPocketBaseClient(pocketbaseUrl), [pocketbaseUrl]);
 
@@ -320,8 +319,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, geminiApiKey, classN
         if (shouldTriggerBot) {
              const history = messages.slice(-5).map(m => `${usersMap.get(m.user)?.username || 'User'}: ${m.text}`);
              try {
-                // Pass apiKey explicitly
-                const botResponse = await generateBotResponse(text, history, geminiApiKey);
+                // Call bot service without passing apiKey (it uses env var)
+                const botResponse = await generateBotResponse(text, history);
                 const botMsg: Message = {
                     id: Math.random().toString(),
                     collectionId: 'messages',
@@ -438,7 +437,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, geminiApiKey, classN
 
   // --- Render (Context Wrapper) ---
   return (
-    <MIRCProvider pb={pb} geminiApiKey={geminiApiKey}>
+    <MIRCProvider pb={pb}>
       <div className={`flex flex-col h-full w-full bg-mirc-darker text-gray-200 overflow-hidden ${className || ''}`}>
         {!currentUser ? (
           <div className="flex items-center justify-center h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
