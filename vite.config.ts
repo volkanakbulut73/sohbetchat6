@@ -10,9 +10,11 @@ export default defineConfig(({ mode }) => {
   
   const define: Record<string, any> = {};
   
-  // Always define process.env.API_KEY. If missing, it will be an empty string,
-  // which is safer than undefined for string manipulation.
-  define['process.env.API_KEY'] = JSON.stringify(apiKey || '');
+  // Only inject the key if we found one in the build environment. 
+  // Otherwise, leave the code as is so it can read from window.process at runtime.
+  if (apiKey) {
+    define['process.env.API_KEY'] = JSON.stringify(apiKey);
+  }
 
   return {
     plugins: [react()],

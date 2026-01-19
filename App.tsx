@@ -210,10 +210,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     setIsLoading(true);
 
     try {
-        const password = 'password123'; 
+        const password = 'password123';
+        
+        // 1. Try to create account first (Optimistic)
+        // We ignore errors here because if it fails, it usually means user exists,
+        // so we just fall through to the Auth step.
         try {
-            await pb.collection('users').authWithPassword(usernameInput, password);
-        } catch {
             await pb.collection('users').create({
                 username: usernameInput,
                 password: password,
@@ -222,9 +224,22 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 isOnline: true,
                 banned: false
             });
-            await pb.collection('users').authWithPassword(usernameInput, password);
+        } catch (createError) {
+            // Ignore creation errors (likely "username taken")
         }
         
+        // 2. Authenticate
+        try {
+            await pb.collection('users').authWithPassword(usernameInput, password);
+        } catch (authError) {
+            // If auth fails after we potentially tried to create, it means password mismatch
+            // or the username is taken by someone else with a different password.
+            alert("Username taken or incorrect password.");
+            setIsLoading(false);
+            return;
+        }
+        
+        // 3. Setup Session
         const model = pb.authStore.model;
         if (model) {
             if (model.banned) {
@@ -259,8 +274,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         }
     } catch (e: any) {
         if (e?.message !== "The current and the previous request authorization don't match.") {
-            alert("Login failed or Username taken (if new).");
             console.error(e);
+            alert("An unexpected error occurred during login.");
         }
     } finally {
         setIsLoading(false);
@@ -319,7 +334,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         if (shouldTriggerBot) {
              const history = messages.slice(-5).map(m => `${usersMap.get(m.user)?.username || 'User'}: ${m.text}`);
              try {
-                // Call bot service without passing apiKey (it uses env var)
+                // Call bot service
                 const botResponse = await generateBotResponse(text, history);
                 const botMsg: Message = {
                     id: Math.random().toString(),
