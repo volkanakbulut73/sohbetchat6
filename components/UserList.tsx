@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { Shield, Star, Bot, Smile, MessageCircle, Ban, UserMinus, Lock, Circle } from 'lucide-react';
+import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle } from 'lucide-react';
 
 interface UserListProps {
   users: User[];
@@ -49,13 +49,7 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
-  // Filter out offline users for mobile view to prevent clutter
-  // Note: Parent component handles the 'ghost' filtering logic (time based)
-  // This just handles visual preference.
-  // We determine mobile via window width check or simple CSS logic, 
-  // but to keep react pure, we just render all, but visually, we can hint.
-  // Actually, let's just show everyone but sort them well.
-  
+  // Sort: Admin > Op > Bot > Online > Offline > Name
   const sortedUsers = [...users].sort((a, b) => {
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
       if (roles[a.role] !== roles[b.role]) return roles[a.role] - roles[b.role];
@@ -79,9 +73,6 @@ const UserList: React.FC<UserListProps> = ({
       
       <div className="flex-1 overflow-y-auto p-1 md:p-2 space-y-0.5">
         {sortedUsers.map((user) => {
-            // Mobile Optimization: If user is offline, maybe hide them if list is huge?
-            // For now, we rely on the App.tsx 'ghost' buster to actually mark them offline
-            // But visually, let's make sure offline users are distinct.
             return (
               <div
                 key={user.id}
@@ -89,16 +80,15 @@ const UserList: React.FC<UserListProps> = ({
                 onDoubleClick={() => onOpenPrivateChat(user)}
                 className={`
                     group flex items-center space-x-2 p-1.5 md:p-2 rounded cursor-pointer transition-all
-                    ${user.isOnline ? 'hover:bg-white/5 opacity-100' : 'opacity-40 hover:opacity-100 hover:bg-white/5 hidden md:flex'} 
+                    ${user.isOnline ? 'hover:bg-white/5 opacity-100' : 'opacity-50 hover:opacity-100 hover:bg-white/5 grayscale'} 
                     border border-transparent hover:border-white/10
                 `}
-                /* Note: added 'hidden md:flex' to offline users to hide them on mobile */
               >
                 <div className="relative shrink-0">
                     <img 
                         src={user.avatar || `https://ui-avatars.com/api/?name=${user.username}&background=random`} 
                         alt={user.username} 
-                        className={`w-6 h-6 md:w-8 md:h-8 rounded-full border-2 ${user.banned ? 'border-red-500' : 'border-mirc-darker'} ${!user.isOnline && !user.banned ? 'grayscale' : ''}`}
+                        className={`w-6 h-6 md:w-8 md:h-8 rounded-full border-2 ${user.banned ? 'border-red-500' : 'border-mirc-darker'} transition-all`}
                     />
                     
                     <div className={`absolute bottom-0 right-0 rounded-full border-2 border-mirc-dark bg-mirc-darker flex items-center justify-center w-3 h-3 md:w-3.5 md:h-3.5`}>
@@ -115,7 +105,7 @@ const UserList: React.FC<UserListProps> = ({
                         {user.username}
                     </span>
                     {!user.isOnline && user.role !== UserRole.BOT && (
-                        <span className="text-[9px] text-gray-600 uppercase font-bold leading-none">Offline</span>
+                        <span className="text-[9px] text-gray-500 uppercase font-bold leading-none">Away</span>
                     )}
                 </div>
 

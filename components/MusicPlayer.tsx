@@ -10,14 +10,13 @@ const MusicPlayer: React.FC = () => {
   const [currentIndex, setCurrentIndex] = useState(0);
   
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isBuffering, setIsBuffering] = useState(false); // New state for mobile loading
+  const [isBuffering, setIsBuffering] = useState(false); 
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // Helper to determine the source URL (File vs External URL)
   const getTrackSource = (track: any): string => {
       if (!track) return "";
       if (track.audio_file) {
@@ -40,7 +39,6 @@ const MusicPlayer: React.FC = () => {
       
       if (records && records.length > 0) {
         setTrackList(records);
-        // Only set initial track if nothing is playing
         if (!isPlaying && audioUrl === "") {
             const firstTrack = records[0];
             setCurrentTrack(firstTrack.title || "İsimsiz Şarkı");
@@ -59,11 +57,8 @@ const MusicPlayer: React.FC = () => {
 
   useEffect(() => {
     fetchTracks();
-    // Subscribe logic is simplified to avoid complexity in this snippet
-    // as fetching on mount is sufficient for the fix demonstration
   }, [pb]);
 
-  // Validation Check
   useEffect(() => {
       if (!audioUrl) return;
       if (window.location.protocol === 'https:' && audioUrl.startsWith('http:')) {
@@ -80,8 +75,7 @@ const MusicPlayer: React.FC = () => {
     }
   }, [isMuted]);
 
-  // CRITICAL MOBILE FIX:
-  // The play action must be direct. If it's loading, we show buffering.
+  // ROBUST MOBILE PLAY LOGIC
   const togglePlay = async () => {
       const audio = audioRef.current;
       if (!audio) return;
@@ -96,20 +90,35 @@ const MusicPlayer: React.FC = () => {
           setIsPlaying(false);
           setIsBuffering(false);
       } else {
-          // Set buffering first, wait for promise
           setIsBuffering(true);
+          setError(null);
+          
           try {
-              await audio.play();
-              setIsPlaying(true);
-              setIsBuffering(false);
-          } catch (err: any) {
-              console.error("Playback failed:", err);
+              // Force load for mobile if stream is stale
+              if (audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE || audio.networkState === HTMLMediaElement.NETWORK_EMPTY) {
+                  audio.load();
+              }
+              
+              const playPromise = audio.play();
+              if (playPromise !== undefined) {
+                  playPromise.then(() => {
+                      setIsPlaying(true);
+                      setIsBuffering(false);
+                  }).catch(err => {
+                      console.error("Play error:", err);
+                      setIsPlaying(false);
+                      setIsBuffering(false);
+                      // Mobile often blocks auto-play, requiring clearer feedback
+                      if (err.name === 'NotAllowedError') {
+                           setError("Dokun ve Başlat");
+                      } else {
+                           setError("Oynatılamadı");
+                      }
+                  });
+              }
+          } catch (e) {
               setIsPlaying(false);
               setIsBuffering(false);
-              // Common mobile error: "The request is not allowed by the user agent..."
-              if (err.name === 'NotAllowedError') {
-                   setError("Play'e Basın");
-              }
           }
       }
   };
@@ -125,7 +134,6 @@ const MusicPlayer: React.FC = () => {
       setCurrentTrack(nextTrack.title || "İsimsiz Şarkı");
       const nextUrl = getTrackSource(nextTrack);
       
-      // Stop current before switching src
       if (audioRef.current) {
           audioRef.current.pause();
           setIsPlaying(false);
@@ -133,26 +141,26 @@ const MusicPlayer: React.FC = () => {
       
       setAudioUrl(nextUrl);
       setError(null);
-      setIsBuffering(true); // Assume buffering for next track
+      setIsBuffering(true); 
+      // Auto-play next track if we were already playing or user clicked next
+      // Use timeout to allow React to update the src prop first
+      setTimeout(() => {
+          if(audioRef.current) {
+              audioRef.current.load(); // Important for mobile to recognize new source
+              audioRef.current.play().catch(() => setIsPlaying(false));
+          }
+      }, 100);
     }
   };
 
   const handleStreamError = (e: any) => {
-      if (!error && audioUrl) {
+      if (!error && audioUrl && isPlaying) {
+        // Only show error if we were trying to play
+        console.log("Stream error details:", e);
         setError("Yayın Hatası");
         setIsPlaying(false);
         setIsBuffering(false);
       }
-  };
-
-  // When audio is actually ready to play or playing
-  const handlePlaying = () => {
-      setIsBuffering(false);
-      setIsPlaying(true);
-  };
-  
-  const handleWaiting = () => {
-      if (isPlaying) setIsBuffering(true);
   };
 
   return (
@@ -166,9 +174,9 @@ const MusicPlayer: React.FC = () => {
         src={audioUrl || undefined} 
         onEnded={handleNext} 
         onError={handleStreamError}
-        onPlaying={handlePlaying}
-        onWaiting={handleWaiting}
-        preload="auto"
+        onPlaying={() => { setIsBuffering(false); setIsPlaying(true); }}
+        onWaiting={() => setIsBuffering(true)}
+        preload="none" 
         playsInline
       />
       

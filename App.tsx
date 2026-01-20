@@ -11,14 +11,12 @@ import MessageList from './components/MessageList';
 import PrivateChatWindow from './components/PrivateChatWindow';
 import { LogOut, Hash, Plus, Command, Bot, Users, Lock, Unlock, Loader2, Key } from 'lucide-react';
 
-// Module Props Interface
 export interface CuteMIRCProps {
     pocketbaseUrl: string;
     className?: string;
 }
 
 const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
-  // Initialize PocketBase Client for this instance
   const pb = useMemo(() => createPocketBaseClient(pocketbaseUrl), [pocketbaseUrl]);
 
   // --- State ---
@@ -94,7 +92,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     let fetchedUsers: User[] = [];
 
     try {
-        // Fetch all users
         fetchedUsers = await pb.collection('users').getFullList<User>({ sort: 'username', requestKey: null });
     } catch(e: any) { 
         if (e?.message !== "The current and the previous request authorization don't match.") {
@@ -103,15 +100,14 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     }
 
     // GHOST BUSTING LOGIC:
-    // If a user says they are "Online" but hasn't updated their profile in 2 minutes, mark them offline locally.
+    // Increased to 5 minutes for mobile background scenarios
     const now = new Date();
-    const twoMinutesAgo = new Date(now.getTime() - 2 * 60 * 1000);
+    const ghostThreshold = new Date(now.getTime() - 5 * 60 * 1000);
 
     const processedUsers = fetchedUsers.map(u => {
-        // If user is 'online' but updated timestamp is old, force offline visual
-        // PocketBase 'updated' field is ISO string
-        const lastUpdate = new Date(u.updated); // assuming 'updated' field exists
-        const isGhost = u.isOnline && lastUpdate < twoMinutesAgo;
+        const lastUpdate = new Date(u.updated);
+        // Only mark offline if really old, don't remove from list
+        const isGhost = u.isOnline && lastUpdate < ghostThreshold;
         
         // Don't mark current user as ghost
         if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
@@ -121,7 +117,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         return isGhost ? { ...u, isOnline: false } : u;
     });
 
-    // Ensure Current User is in list
+    // Ensure Current User is in list (Fallback if DB fetch returned empty for permission reasons)
     if (pb.authStore.isValid && pb.authStore.model) {
             const myId = pb.authStore.model.id;
             const myUserIndex = processedUsers.findIndex(u => u.id === myId);
@@ -275,15 +271,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                         alert("You have been BANNED from the server.");
                         handleLogout();
                         return;
-                    }
-                    if (updatedUser.isOnline === false) {
-                        // We check "updated" in fetchUsers, so we don't need to auto-logout on simple isOnline changes
-                        // unless explicitly set to false by admin logic (kick).
-                        // Since heartbeat sets isOnline=true constantly, a kick would set it false.
-                        // We rely on visual cue or explicit message for kick, but let's keep it safe:
-                        // handleLogout(); 
-                        // Note: Removing auto-logout on isOnline:false because heartbeat might race.
-                        // Let the Kick action handle the logout via a separate mechanism or message.
                     }
                     setCurrentUser(prev => {
                         if (prev && prev.role !== updatedUser.role) {
