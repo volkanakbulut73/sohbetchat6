@@ -90,39 +90,46 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   // --- Core Data Fetching ---
   const fetchUsers = useCallback(async () => {
-    try {
-        const res = await pb.collection('users').getFullList<User>({ sort: 'username', requestKey: null });
-        
-        if (pb.authStore.isValid && pb.authStore.model) {
-             const myId = pb.authStore.model.id;
-             const myUserIndex = res.findIndex(u => u.id === myId);
-             
-             if (myUserIndex !== -1) {
-                 res[myUserIndex] = { ...res[myUserIndex], isOnline: true };
-             } else {
-                 const me: User = {
-                     id: myId,
-                     username: pb.authStore.model.username,
-                     role: (pb.authStore.model.role as UserRole) || UserRole.USER,
-                     isOnline: true,
-                     avatar: pb.authStore.model.avatar ? pb.files.getUrl(pb.authStore.model, pb.authStore.model.avatar) : undefined
-                 };
-                 res.push(me);
-             }
-        }
+    // Defines the Bot
+    const bot: User = { id: 'bot_ai', username: BOT_NAME, role: UserRole.BOT, isOnline: true, avatar: 'https://cdn-icons-png.flaticon.com/512/4712/4712027.png' };
+    
+    let fetchedUsers: User[] = [];
 
-        const bot: User = { id: 'bot_ai', username: BOT_NAME, role: UserRole.BOT, isOnline: true, avatar: 'https://cdn-icons-png.flaticon.com/512/4712/4712027.png' };
-        
-        const realUsers = res.filter(u => u.id !== 'bot_ai');
-        const allUsers = [...realUsers, bot];
-        
-        setUsers(allUsers);
-        setUsersMap(new Map(allUsers.map(u => [u.id, u])));
+    try {
+        fetchedUsers = await pb.collection('users').getFullList<User>({ sort: 'username', requestKey: null });
     } catch(e: any) { 
+        // If 403 or other error, we continue with empty list so we can at least show the current user
         if (e?.message !== "The current and the previous request authorization don't match.") {
-            console.log("Fetch users error", e); 
+            console.log("Fetch users error (likely permissions)", e.message); 
         }
     }
+
+    // Post-process: Ensure Current User is in the list and Online
+    if (pb.authStore.isValid && pb.authStore.model) {
+            const myId = pb.authStore.model.id;
+            const myUserIndex = fetchedUsers.findIndex(u => u.id === myId);
+            
+            if (myUserIndex !== -1) {
+                fetchedUsers[myUserIndex] = { ...fetchedUsers[myUserIndex], isOnline: true };
+            } else {
+                // If permission rules hid me from the list, force add me
+                const me: User = {
+                    id: myId,
+                    username: pb.authStore.model.username,
+                    role: (pb.authStore.model.role as UserRole) || UserRole.USER,
+                    isOnline: true,
+                    avatar: pb.authStore.model.avatar ? pb.files.getUrl(pb.authStore.model, pb.authStore.model.avatar) : undefined
+                };
+                fetchedUsers.push(me);
+            }
+    }
+
+    // Combine
+    const realUsers = fetchedUsers.filter(u => u.id !== 'bot_ai');
+    const allUsers = [...realUsers, bot];
+    
+    setUsers(allUsers);
+    setUsersMap(new Map(allUsers.map(u => [u.id, u])));
   }, [pb]);
 
   // --- Effects ---
@@ -529,7 +536,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // --- Render (Context Wrapper) ---
   return (
     <MIRCProvider pb={pb}>
-      <div className={`flex flex-col h-full w-full bg-mirc-darker text-gray-200 overflow-hidden ${className || ''}`}>
+      <div className={`flex flex-col h-[100dvh] w-full bg-mirc-darker text-gray-200 overflow-hidden ${className || ''}`}>
         {!currentUser ? (
           <div className="flex items-center justify-center h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
               <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-mirc-pink/30 w-96 text-center">

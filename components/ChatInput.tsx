@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Send, Image as ImageIcon, Mic, Lock, Palette } from 'lucide-react';
+import { Send, Image as ImageIcon, Mic, Lock, Palette, X } from 'lucide-react';
 
 interface ChatInputProps {
   onSendMessage: (text: string, file?: File) => void;
@@ -11,13 +11,23 @@ interface ChatInputProps {
 const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAttachments = true, isLocked = false }) => {
   const [text, setText] = useState('');
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!text.trim()) return;
 
-    onSendMessage(text);
+    let finalMsg = text;
+    
+    // Only apply color if it's not a system command (starts with / but not /me)
+    const isCommand = text.startsWith('/') && !text.startsWith('/me');
+
+    if (selectedColor && !isCommand) {
+        finalMsg = `//color ${selectedColor} ${text}`;
+    }
+
+    onSendMessage(finalMsg);
     setText('');
   };
 
@@ -35,19 +45,8 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
     }
   };
 
-  const handleColorSelect = (colorHex: string) => {
-    // Regex matches existing color tag like //color #123456 at start
-    const colorRegex = /^\/\/color\s+#[0-9a-fA-F]{6}\s+/;
-    
-    let newText = text;
-    if (colorRegex.test(text)) {
-        // Replace existing color
-        newText = text.replace(colorRegex, `//color ${colorHex} `);
-    } else {
-        // Prepend new color
-        newText = `//color ${colorHex} ${text}`;
-    }
-    setText(newText);
+  const handleColorSelect = (colorHex: string | null) => {
+    setSelectedColor(colorHex);
     setShowColorPicker(false);
   };
 
@@ -61,7 +60,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
   ];
 
   return (
-    <div className="p-2 md:p-4 bg-slate-900/95 backdrop-blur-sm border-t border-gray-700 relative z-20 shrink-0">
+    <div className="p-2 pb-4 md:p-4 bg-slate-900/95 backdrop-blur-sm border-t border-gray-700 relative z-20 shrink-0">
       <div className={`
         flex items-end gap-1 md:gap-2 p-1.5 md:p-2 rounded-xl border transition-all
         ${disabled 
@@ -90,7 +89,8 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
         {!disabled && (
             <div className="relative">
                 <button 
-                    className={`p-1.5 md:p-2 transition-colors ${showColorPicker ? 'text-yellow-400' : 'text-gray-400 hover:text-yellow-400'}`}
+                    className={`p-1.5 md:p-2 transition-colors ${showColorPicker ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+                    style={{ color: selectedColor || undefined }}
                     onClick={() => setShowColorPicker(!showColorPicker)}
                     title="Choose Text Color"
                 >
@@ -99,6 +99,13 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
                 
                 {showColorPicker && (
                     <div className="absolute bottom-full left-0 mb-3 p-2 bg-slate-800 border border-slate-600 rounded-lg shadow-xl flex gap-2 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                        <button
+                            onClick={() => handleColorSelect(null)}
+                            className="w-6 h-6 rounded-full border border-gray-500 bg-transparent flex items-center justify-center hover:bg-white/10"
+                            title="Default Color"
+                        >
+                            <X size={12} className="text-gray-400" />
+                        </button>
                         {presetColors.map((c) => (
                             <button
                                 key={c.hex}
@@ -124,9 +131,11 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
           onKeyDown={handleKeyDown}
           disabled={disabled}
           placeholder={disabled ? "Channel is muted (Admins only)" : "Type..."}
+          style={{ color: selectedColor || undefined }}
           className={`
             flex-1 bg-transparent border-none outline-none resize-none max-h-24 md:max-h-32 min-h-[36px] md:min-h-[44px] py-2 font-mono text-xs md:text-sm
-            ${disabled ? 'text-gray-500' : 'text-gray-200 placeholder-gray-500'}
+            ${disabled ? 'text-gray-500' : 'placeholder-gray-500'}
+            ${!selectedColor && !disabled ? 'text-gray-200' : ''}
           `}
           rows={1}
         />

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipForward, Volume2, VolumeX, AlertCircle, Radio } from 'lucide-react';
+import { Play, Pause, SkipForward, Volume2, VolumeX, AlertCircle, Radio, Loader2 } from 'lucide-react';
 import { useMIRCContext } from '../context/MIRCContext';
 
 const MusicPlayer: React.FC = () => {
@@ -12,6 +12,7 @@ const MusicPlayer: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -29,6 +30,7 @@ const MusicPlayer: React.FC = () => {
 
   const fetchTracks = async () => {
     try {
+      setIsLoading(true);
       setError(null);
       // requestKey: null prevents auto-cancellation
       const records = await pb.collection('room_music').getFullList({
@@ -50,13 +52,14 @@ const MusicPlayer: React.FC = () => {
       }
     } catch (err: any) {
       if (err.status === 403) {
-        // Explicitly handle the "Only admins" error
         setCurrentTrack("Erişim Reddedildi");
-        setError("Admin Paneli > API Rules Açın");
-      } else if (err.status !== 0) { // Ignore abort errors
+        setError("API Rules");
+      } else if (err.status !== 0) {
         console.warn("Müzik listesi hatası:", err.message);
         setCurrentTrack("Bağlantı Hatası");
       }
+    } finally {
+        setIsLoading(false);
     }
   };
 
@@ -81,57 +84,60 @@ const MusicPlayer: React.FC = () => {
           pb.collection('room_music').unsubscribe('*').catch(() => {});
       } catch(_) {}
     };
-  }, [pb]); // Added pb dependency
+  }, [pb]);
 
   // Validation Check for URL issues
   useEffect(() => {
       if (!audioUrl) return;
-
+      
       // 1. Check for Mixed Content (HTTP on HTTPS)
       if (window.location.protocol === 'https:' && audioUrl.startsWith('http:')) {
-          setError("HTTPS Gerekli (HTTP Link)");
+          setError("HTTPS Gerekli");
           setIsPlaying(false);
           return;
       }
-
-      // 2. Check for Playlist files (Browsers can't play these directly)
+      // 2. Check for Playlist files
       if (audioUrl.includes('.pls') || audioUrl.includes('.m3u') || audioUrl.includes('.asx')) {
-          setError("Hatalı Link (.pls/.m3u)");
+          setError("Hatalı Link");
           setIsPlaying(false);
           return;
       }
-      
       setError(null);
   }, [audioUrl]);
 
-  // Handle Playback State
-  useEffect(() => {
-    if (!audioRef.current) return;
-
-    if (isPlaying && audioUrl && !error) {
-      const playPromise = audioRef.current.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(err => {
-          console.log("Playback prevented:", err);
-          setIsPlaying(false);
-        });
-      }
-    } else {
-      audioRef.current.pause();
-    }
-  }, [isPlaying, audioUrl, error]);
-
+  // Mute effect
   useEffect(() => {
     if (audioRef.current) {
         audioRef.current.muted = isMuted;
     }
   }, [isMuted]);
 
-  const togglePlay = () => {
+  // IMPORTANT: On mobile, we must call .play() directly from the click handler.
+  // We removed the useEffect that listened to [isPlaying] to trigger playback.
+  const togglePlay = async () => {
+      const audio = audioRef.current;
+      if (!audio) return;
+
       if (error) {
-          handleNext(); // Skip broken track
+          handleNext();
+          return;
+      }
+
+      if (isPlaying) {
+          audio.pause();
+          setIsPlaying(false);
       } else {
-          setIsPlaying(!isPlaying);
+          try {
+              // Attempt to play directly
+              await audio.play();
+              setIsPlaying(true);
+          } catch (err) {
+              console.error("Playback failed:", err);
+              setIsPlaying(false);
+              // Provide visual feedback if it failed (e.g. mobile policy)
+              // But usually this catch block runs if user hasn't interacted, 
+              // since this IS a click handler, it should pass on most devices.
+          }
       }
   };
   
@@ -144,27 +150,48 @@ const MusicPlayer: React.FC = () => {
       
       setCurrentIndex(nextIndex);
       setCurrentTrack(nextTrack.title || "İsimsiz Şarkı");
-      setAudioUrl(getTrackSource(nextTrack));
-      setIsPlaying(true);
+      const nextUrl = getTrackSource(nextTrack);
+      setAudioUrl(nextUrl);
+      
       setError(null);
+      setIsLoading(true);
+
+      // Auto-play next track
+      // Note: Some mobile browsers block this if not directly triggered by user
+      // We set a small timeout to let the new src load
+      setTimeout(async () => {
+          if (audioRef.current) {
+              try {
+                  await audioRef.current.play();
+                  setIsPlaying(true);
+              } catch (e) {
+                  console.warn("Autoplay blocked for next track", e);
+                  setIsPlaying(false);
+              } finally {
+                  setIsLoading(false);
+              }
+          }
+      }, 100);
     }
   };
 
   const handleStreamError = (e: any) => {
-      if (!error) {
-          // Only warn if we actually have a URL that failed
-          if (audioUrl) {
-            console.warn("Stream error for URL:", audioUrl);
-            setError("Yayın Çevrimdışı");
-          }
-          setIsPlaying(false);
+      if (!error && audioUrl) {
+        console.warn("Stream error for URL:", audioUrl);
+        setError("Yayın Hatası");
+        setIsPlaying(false);
       }
+      setIsLoading(false);
+  };
+
+  const handleCanPlay = () => {
+      setIsLoading(false);
   };
 
   return (
     <div className={`
-        flex items-center gap-1 md:gap-3 p-1 px-2 md:p-2 md:px-4 rounded-full border backdrop-blur-md shadow-lg select-none min-w-fit md:min-w-[150px] transition-colors
-        ${error ? 'bg-red-900/40 border-red-500/50' : 'bg-black/60 border-cyan-500/30'}
+        flex items-center gap-2 p-1 px-3 md:p-2 md:px-4 rounded-full border backdrop-blur-md shadow-lg select-none transition-colors max-w-[200px] md:max-w-none
+        ${error ? 'bg-red-900/60 border-red-500/50' : 'bg-black/60 border-cyan-500/30'}
     `}>
       <audio 
         key={audioUrl}
@@ -172,40 +199,54 @@ const MusicPlayer: React.FC = () => {
         src={audioUrl || undefined} 
         onEnded={handleNext} 
         onError={handleStreamError}
-        preload="none"
+        onCanPlay={handleCanPlay}
+        preload="metadata"
+        playsInline
       />
       
-      <div className="hidden md:flex items-center space-x-3 text-cyan-400">
-        {error ? <AlertCircle size={18} className="text-red-400" /> : <Radio size={18} className={isPlaying ? "animate-pulse text-mirc-pink" : ""} />}
-        <div className="flex flex-col overflow-hidden w-32">
-          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest leading-none">mIRC RADIO</span>
-          <span className={`text-sm font-mono truncate ${error ? 'text-red-300 font-bold' : 'text-pink-400'}`}>
-            {error || currentTrack}
-          </span>
+      {/* Track Info - Now Visible on Mobile (Truncated) */}
+      <div className="flex items-center space-x-2 md:space-x-3 text-cyan-400 overflow-hidden flex-1 md:flex-initial">
+        {isLoading ? (
+             <Loader2 size={16} className="animate-spin text-mirc-pink shrink-0" />
+        ) : error ? (
+            <AlertCircle size={16} className="text-red-400 shrink-0" />
+        ) : (
+            <Radio size={16} className={`shrink-0 ${isPlaying ? "animate-pulse text-mirc-pink" : ""}`} />
+        )}
+        
+        <div className="flex flex-col overflow-hidden w-20 md:w-32">
+          <span className="text-[8px] md:text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-none hidden md:block">mIRC RADIO</span>
+          <div className="relative overflow-hidden h-4 md:h-5 w-full">
+             <div className={`whitespace-nowrap ${isPlaying && !error ? 'animate-marquee' : 'truncate'}`}>
+                <span className={`text-xs md:text-sm font-mono ${error ? 'text-red-300 font-bold' : 'text-pink-400'}`}>
+                    {error || currentTrack}
+                </span>
+             </div>
+          </div>
         </div>
       </div>
 
-      <div className="hidden md:block h-6 w-px bg-gray-600 mx-2"></div>
+      <div className="h-4 w-px bg-gray-600 mx-1 hidden md:block"></div>
 
-      <div className="flex items-center gap-1 md:gap-2">
+      <div className="flex items-center gap-2 shrink-0">
         <button onClick={toggleMute} className="hidden md:block text-gray-400 hover:text-white transition-colors">
           {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
         </button>
 
         <button 
           onClick={togglePlay}
-          className={`p-1.5 rounded-full text-white transition-all shadow-md ${isPlaying ? 'bg-pink-500 hover:bg-pink-600' : 'bg-gray-600 hover:bg-gray-500'}`}
+          className={`p-1.5 md:p-1.5 rounded-full text-white transition-all shadow-md active:scale-95 ${isPlaying ? 'bg-pink-500 hover:bg-pink-600' : 'bg-gray-600 hover:bg-gray-500'}`}
         >
           {isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" />}
         </button>
 
-        <button onClick={handleNext} className="text-gray-400 hover:text-cyan-400 transition-colors">
+        <button onClick={handleNext} className="text-gray-400 hover:text-cyan-400 transition-colors p-1">
           <SkipForward size={16} />
         </button>
       </div>
 
       {isPlaying && !error && (
-        <div className="flex items-end space-x-[2px] h-3 ml-1">
+        <div className="hidden md:flex items-end space-x-[2px] h-3 ml-1">
             <div className="w-[2px] bg-cyan-400 animate-[bounce_1s_infinite]"></div>
             <div className="w-[2px] bg-pink-500 animate-[bounce_1.2s_infinite]"></div>
             <div className="w-[2px] bg-cyan-400 animate-[bounce_0.8s_infinite]"></div>

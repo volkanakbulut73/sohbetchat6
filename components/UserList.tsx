@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { Shield, Star, Bot, Smile, MessageCircle, Ban, UserMinus, Lock } from 'lucide-react';
+import { Shield, Star, Bot, Smile, MessageCircle, Ban, UserMinus, Lock, Circle } from 'lucide-react';
 
 interface UserListProps {
   users: User[];
@@ -33,12 +33,14 @@ const UserList: React.FC<UserListProps> = ({
       case UserRole.ADMIN: return <Star size={12} className="text-yellow-400" />;
       case UserRole.OPERATOR: return <Shield size={12} className="text-blue-400" />;
       case UserRole.BOT: return <Bot size={12} className="text-mirc-pink" />;
-      default: return <Smile size={12} className="text-mirc-green" />;
+      default: return null; // Standard users don't need a role icon, prevents clutter
     }
   };
 
   const getRoleColor = (user: User) => {
     if (user.banned) return "text-red-500 line-through decoration-2";
+    if (!user.isOnline && user.role !== UserRole.BOT) return "text-gray-500"; // Offline style
+
     switch (user.role) {
       case UserRole.ADMIN: return "text-yellow-400 font-bold shadow-yellow-400/20";
       case UserRole.OPERATOR: return "text-blue-400 font-semibold";
@@ -47,14 +49,24 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
-  // FILTER: Only show Online users and Bots. Hide Offline users.
-  const visibleUsers = users.filter(u => u.isOnline || u.role === UserRole.BOT);
-
-  // SORT: Admin -> Operator -> Bot -> User
-  const sortedUsers = [...visibleUsers].sort((a, b) => {
+  // SORT: Admin -> Operator -> Bot -> Online User -> Offline User
+  const sortedUsers = [...users].sort((a, b) => {
+      // 1. Role Priority
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
-      return roles[a.role] - roles[b.role];
+      if (roles[a.role] !== roles[b.role]) {
+          return roles[a.role] - roles[b.role];
+      }
+      
+      // 2. Online Status (Online first)
+      if (a.isOnline !== b.isOnline) {
+          return a.isOnline ? -1 : 1;
+      }
+
+      // 3. Alphabetical
+      return a.username.localeCompare(b.username);
   });
+
+  const onlineCount = users.filter(u => u.isOnline || u.role === UserRole.BOT).length;
 
   const canKick = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.OPERATOR;
   const canBan = currentUserRole === UserRole.ADMIN;
@@ -63,8 +75,9 @@ const UserList: React.FC<UserListProps> = ({
   return (
     <div className="w-48 md:w-64 bg-mirc-dark border-l border-gray-700 flex flex-col h-full overflow-hidden" onClick={closeMenu}>
       <div className="p-2 md:p-3 border-b border-gray-700 bg-mirc-darker/50 mt-8 md:mt-0">
-        <h3 className="font-bold text-gray-400 text-[10px] md:text-xs uppercase tracking-widest flex items-center gap-2">
-           Online Users ({visibleUsers.length})
+        <h3 className="font-bold text-gray-400 text-[10px] md:text-xs uppercase tracking-widest flex items-center justify-between">
+           <span>Users</span>
+           <span className="bg-slate-800 px-1.5 py-0.5 rounded text-mirc-cyan">{onlineCount}/{users.length}</span>
         </h3>
       </div>
       
@@ -76,27 +89,37 @@ const UserList: React.FC<UserListProps> = ({
             onDoubleClick={() => onOpenPrivateChat(user)}
             className={`
                 group flex items-center space-x-2 p-1.5 md:p-2 rounded cursor-pointer transition-all
-                hover:bg-white/5 border border-transparent hover:border-white/10
-                opacity-100
+                ${user.isOnline ? 'hover:bg-white/5 opacity-100' : 'opacity-60 hover:opacity-100 hover:bg-white/5'}
+                border border-transparent hover:border-white/10
             `}
           >
-            <div className="relative">
+            <div className="relative shrink-0">
                 <img 
                     src={user.avatar || `https://ui-avatars.com/api/?name=${user.username}&background=random`} 
                     alt={user.username} 
-                    className={`w-6 h-6 md:w-8 md:h-8 rounded-full border-2 ${user.banned ? 'border-red-500' : 'border-mirc-darker'}`}
+                    className={`w-6 h-6 md:w-8 md:h-8 rounded-full border-2 ${user.banned ? 'border-red-500' : 'border-mirc-darker'} ${!user.isOnline && !user.banned ? 'grayscale' : ''}`}
                 />
-                {user.role !== UserRole.USER && (
-                    <div className={`absolute -bottom-1 -right-1 bg-mirc-darker rounded-full p-0.5`}>
-                        {getRoleIcon(user.role)}
-                    </div>
-                )}
+                
+                {/* Status Indicator Dot */}
+                <div className={`absolute bottom-0 right-0 rounded-full border-2 border-mirc-dark bg-mirc-darker flex items-center justify-center w-3 h-3 md:w-3.5 md:h-3.5`}>
+                     {user.role !== UserRole.USER ? (
+                         getRoleIcon(user.role)
+                     ) : (
+                         <Circle size={8} className={user.isOnline ? "fill-green-500 text-green-500" : "fill-gray-500 text-gray-500"} />
+                     )}
+                </div>
             </div>
             
-            <span className={`text-xs md:text-sm truncate ${getRoleColor(user)}`}>
-              {user.username}
-            </span>
-            {user.banned && <Lock size={12} className="text-red-500 ml-auto" />}
+            <div className="flex flex-col overflow-hidden">
+                <span className={`text-xs md:text-sm truncate font-medium ${getRoleColor(user)}`}>
+                    {user.username}
+                </span>
+                {!user.isOnline && user.role !== UserRole.BOT && (
+                    <span className="text-[9px] text-gray-600 uppercase font-bold leading-none">Offline</span>
+                )}
+            </div>
+
+            {user.banned && <Lock size={12} className="text-red-500 ml-auto shrink-0" />}
           </div>
         ))}
       </div>
@@ -123,7 +146,7 @@ const UserList: React.FC<UserListProps> = ({
             <>
               <div className="h-px bg-slate-700 my-1 mx-2" />
               
-              {canKick && (
+              {canKick && contextMenu.user.isOnline && (
                   <button 
                     onClick={() => { onKick?.(contextMenu.user!); closeMenu(); }}
                     className="w-full text-left px-3 py-1.5 md:px-4 md:py-2 hover:bg-orange-500/20 hover:text-orange-400 flex items-center gap-2 text-xs md:text-sm text-orange-300"
