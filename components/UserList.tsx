@@ -4,6 +4,7 @@ import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle } from '
 
 interface UserListProps {
   users: User[];
+  currentUserId: string;
   onOpenPrivateChat: (user: User) => void;
   currentUserRole: UserRole;
   onKick?: (user: User) => void;
@@ -13,6 +14,7 @@ interface UserListProps {
 
 const UserList: React.FC<UserListProps> = ({ 
     users, 
+    currentUserId,
     onOpenPrivateChat, 
     currentUserRole,
     onKick,
@@ -49,8 +51,11 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
+  // Filter: Only show Online, Bots, or Self. Hide others.
+  const visibleUsers = users.filter(u => u.isOnline || u.role === UserRole.BOT || u.id === currentUserId);
+
   // Sort: Admin > Op > Bot > Online > Offline > Name
-  const sortedUsers = [...users].sort((a, b) => {
+  const sortedUsers = [...visibleUsers].sort((a, b) => {
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
       if (roles[a.role] !== roles[b.role]) return roles[a.role] - roles[b.role];
       if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;

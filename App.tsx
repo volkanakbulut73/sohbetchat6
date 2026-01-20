@@ -100,16 +100,13 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     }
 
     // GHOST BUSTING LOGIC:
-    // Increased to 5 minutes for mobile background scenarios
     const now = new Date();
     const ghostThreshold = new Date(now.getTime() - 5 * 60 * 1000);
 
     const processedUsers = fetchedUsers.map(u => {
         const lastUpdate = new Date(u.updated);
-        // Only mark offline if really old, don't remove from list
         const isGhost = u.isOnline && lastUpdate < ghostThreshold;
         
-        // Don't mark current user as ghost
         if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
             return { ...u, isOnline: true };
         }
@@ -117,7 +114,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         return isGhost ? { ...u, isOnline: false } : u;
     });
 
-    // Ensure Current User is in list (Fallback if DB fetch returned empty for permission reasons)
     if (pb.authStore.isValid && pb.authStore.model) {
             const myId = pb.authStore.model.id;
             const myUserIndex = processedUsers.findIndex(u => u.id === myId);
@@ -144,13 +140,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   }, [pb]);
 
   // --- HEARTBEAT SYSTEM ---
-  // Ping the server every 30 seconds to say "I am alive"
   useEffect(() => {
     if (!currentUser) return;
 
     const heartbeat = async () => {
         try {
-            // Updating any field refreshes the 'updated' timestamp
             await pb.collection('users').update(currentUser.id, { isOnline: true });
         } catch (e) {
             console.warn("Heartbeat failed", e);
@@ -688,6 +682,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   </div>
                   <UserList 
                       users={users} 
+                      currentUserId={currentUser.id}
                       onOpenPrivateChat={handleOpenPrivateChat} 
                       currentUserRole={currentUser.role}
                       onKick={handleKickUser}

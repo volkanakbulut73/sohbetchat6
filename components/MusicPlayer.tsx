@@ -60,27 +60,20 @@ const MusicPlayer: React.FC = () => {
   }, [pb]);
 
   useEffect(() => {
-      if (!audioUrl) return;
-      if (window.location.protocol === 'https:' && audioUrl.startsWith('http:')) {
-          setError("HTTPS Gerekli");
-          setIsPlaying(false);
-          return;
-      }
-      setError(null);
-  }, [audioUrl]);
-
-  useEffect(() => {
     if (audioRef.current) {
         audioRef.current.muted = isMuted;
     }
   }, [isMuted]);
 
-  // ROBUST MOBILE PLAY LOGIC
-  const togglePlay = async () => {
+  // STRICT MOBILE PLAY LOGIC
+  // We must call play() immediately within the click handler context.
+  // No async/await before the play() call if possible.
+  const togglePlay = () => {
       const audio = audioRef.current;
       if (!audio) return;
 
       if (error) {
+          // If in error state, click tries to fix/next it
           handleNext();
           return;
       }
@@ -93,32 +86,19 @@ const MusicPlayer: React.FC = () => {
           setIsBuffering(true);
           setError(null);
           
-          try {
-              // Force load for mobile if stream is stale
-              if (audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE || audio.networkState === HTMLMediaElement.NETWORK_EMPTY) {
-                  audio.load();
-              }
-              
-              const playPromise = audio.play();
-              if (playPromise !== undefined) {
-                  playPromise.then(() => {
-                      setIsPlaying(true);
-                      setIsBuffering(false);
-                  }).catch(err => {
-                      console.error("Play error:", err);
-                      setIsPlaying(false);
-                      setIsBuffering(false);
-                      // Mobile often blocks auto-play, requiring clearer feedback
-                      if (err.name === 'NotAllowedError') {
-                           setError("Dokun ve Başlat");
-                      } else {
-                           setError("Oynatılamadı");
-                      }
-                  });
-              }
-          } catch (e) {
-              setIsPlaying(false);
-              setIsBuffering(false);
+          // CRITICAL: Call play() synchronously and handle the promise rejection separately.
+          const playPromise = audio.play();
+          
+          if (playPromise !== undefined) {
+              playPromise.then(() => {
+                  setIsPlaying(true);
+                  setIsBuffering(false);
+              }).catch(err => {
+                  console.error("Play error:", err);
+                  setIsPlaying(false);
+                  setIsBuffering(false);
+                  setError("Başlat");
+              });
           }
       }
   };
@@ -141,26 +121,12 @@ const MusicPlayer: React.FC = () => {
       
       setAudioUrl(nextUrl);
       setError(null);
-      setIsBuffering(true); 
-      // Auto-play next track if we were already playing or user clicked next
-      // Use timeout to allow React to update the src prop first
-      setTimeout(() => {
-          if(audioRef.current) {
-              audioRef.current.load(); // Important for mobile to recognize new source
-              audioRef.current.play().catch(() => setIsPlaying(false));
-          }
-      }, 100);
+      // We don't auto-play on mobile next click to be safe, 
+      // or we rely on user clicking play again if browser blocks it.
+      // But we set buffering to indicate change.
+      setIsBuffering(false); 
+      setIsPlaying(false);
     }
-  };
-
-  const handleStreamError = (e: any) => {
-      if (!error && audioUrl && isPlaying) {
-        // Only show error if we were trying to play
-        console.log("Stream error details:", e);
-        setError("Yayın Hatası");
-        setIsPlaying(false);
-        setIsBuffering(false);
-      }
   };
 
   return (
@@ -173,10 +139,10 @@ const MusicPlayer: React.FC = () => {
         ref={audioRef} 
         src={audioUrl || undefined} 
         onEnded={handleNext} 
-        onError={handleStreamError}
         onPlaying={() => { setIsBuffering(false); setIsPlaying(true); }}
         onWaiting={() => setIsBuffering(true)}
         preload="none" 
+        crossOrigin="anonymous"
         playsInline
       />
       
