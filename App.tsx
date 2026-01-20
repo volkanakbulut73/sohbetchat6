@@ -25,6 +25,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  // We maintain a Map for quick lookups and easier merging
   const [usersMap, setUsersMap] = useState<Map<string, User>>(new Map());
   const [showMobileUserList, setShowMobileUserList] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -79,6 +80,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   };
 
   // --- Core Data Fetching ---
+  
+  // Fetches full list initially and performs filtering
   const fetchUsers = useCallback(async () => {
     const bot: User = { 
         id: 'bot_ai', 
@@ -89,22 +92,26 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         created: new Date().toISOString(),
         updated: new Date().toISOString()
     };
+    
     let fetchedUsers: User[] = [];
 
     try {
         fetchedUsers = await pb.collection('users').getFullList<User>({ sort: 'username', requestKey: null });
     } catch(e: any) { 
-        // Silent fail for expected auth mismatches
+        // Silent fail
     }
 
-    // GHOST BUSTING LOGIC:
     const now = new Date();
-    const ghostThreshold = new Date(now.getTime() - 60 * 1000); // 1 minute offline timeout
+    // INCREASED TIMEOUT: Mobile browsers often sleep tabs. 
+    // 5 Minutes (300000ms) prevents users from disappearing when switching apps.
+    const ghostThreshold = new Date(now.getTime() - 5 * 60 * 1000);
 
     const processedUsers = fetchedUsers.map(u => {
         const lastUpdate = new Date(u.updated);
+        // Only mark offline if they haven't updated in 5 minutes
         const isGhost = u.isOnline && lastUpdate < ghostThreshold;
         
+        // Ensure "Me" is always online locally
         if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
             return { ...u, isOnline: true };
         }
@@ -112,22 +119,21 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         return isGhost ? { ...u, isOnline: false } : u;
     });
 
+    // Ensure 'Me' exists in the list even if DB fetch lags
     if (pb.authStore.isValid && pb.authStore.model) {
-            const myId = pb.authStore.model.id;
-            const myUserIndex = processedUsers.findIndex(u => u.id === myId);
-            
-            if (myUserIndex === -1) {
-                const me: User = {
-                    id: myId,
-                    username: pb.authStore.model.username,
-                    role: (pb.authStore.model.role as UserRole) || UserRole.USER,
-                    isOnline: true,
-                    avatar: pb.authStore.model.avatar ? pb.files.getUrl(pb.authStore.model, pb.authStore.model.avatar) : undefined,
-                    created: pb.authStore.model.created,
-                    updated: pb.authStore.model.updated
-                };
-                processedUsers.push(me);
-            }
+        const myId = pb.authStore.model.id;
+        if (!processedUsers.find(u => u.id === myId)) {
+            const me: User = {
+                id: myId,
+                username: pb.authStore.model.username,
+                role: (pb.authStore.model.role as UserRole) || UserRole.USER,
+                isOnline: true,
+                avatar: pb.authStore.model.avatar ? pb.files.getUrl(pb.authStore.model, pb.authStore.model.avatar) : undefined,
+                created: pb.authStore.model.created,
+                updated: pb.authStore.model.updated
+            };
+            processedUsers.push(me);
+        }
     }
 
     const realUsers = processedUsers.filter(u => u.id !== 'bot_ai');
@@ -145,11 +151,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         try {
             await pb.collection('users').update(currentUser.id, { isOnline: true });
         } catch (e) {
-            // Heartbeat failed, likely network
+            // Heartbeat failed
         }
     };
     
-    // Initial heartbeat
+    // Send immediately on login/mount
     heartbeat();
 
     const intervalId = setInterval(heartbeat, 30000); // 30 seconds
@@ -228,6 +234,10 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             await pb.collection('messages').subscribe('*', function (e) {
                 if (e.action === 'create' && e.record.room === currentRoom.id) {
                     const newMsg = e.record as unknown as Message;
+                    // Add message and expand user from our local map if expansion is missing
+                    if (!newMsg.expand?.user && newMsg.user) {
+                        newMsg.expand = { user: usersMap.get(newMsg.user) };
+                    }
                     setMessages((prev) => [...prev, newMsg]);
                 }
             });
@@ -241,7 +251,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     initSub();
 
     return () => { 
-        // Safe unsubscribe
         const cleanup = async () => {
             try {
                 await pb.collection('messages').unsubscribe('*'); 
@@ -250,33 +259,45 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         };
         cleanup();
     };
-  }, [currentRoom?.id, pb]);
+  }, [currentRoom?.id, pb, usersMap]); // Added usersMap dependency so messages can find users
 
-  // 3. User Presence Subscription
+  // 3. User Presence Subscription - OPTIMIZED
   useEffect(() => {
+    // Initial fetch
     fetchUsers();
     
-    // Refresh user list every 60 seconds regardless of events to clear ghosts
+    // Backup sweep every 60s
     const ghostInterval = setInterval(fetchUsers, 60000);
 
     const initUserSub = async () => {
         try {
             await pb.collection('users').subscribe('*', (e) => {
-                fetchUsers();
-                const myId = pb.authStore.model?.id;
-                if (myId && e.record.id === myId && e.action === 'update') {
+                // IMPORTANT: Do NOT call fetchUsers() here. It's too heavy for every heartbeat.
+                // Instead, update the specific user in the list directly.
+                
+                if (e.action === 'update' || e.action === 'create') {
                     const updatedUser = e.record as unknown as User;
-                    if (updatedUser.banned) {
-                        alert("You have been BANNED from the server.");
-                        handleLogout();
-                        return;
-                    }
-                    setCurrentUser(prev => {
-                        if (prev && prev.role !== updatedUser.role) {
-                            return { ...prev, role: updatedUser.role };
+                    
+                    setUsers(prevUsers => {
+                        const exists = prevUsers.some(u => u.id === updatedUser.id);
+                        if (exists) {
+                            return prevUsers.map(u => u.id === updatedUser.id ? { ...u, ...updatedUser } : u);
+                        } else {
+                            return [...prevUsers, updatedUser];
                         }
-                        return prev;
                     });
+
+                    setUsersMap(prev => new Map(prev).set(updatedUser.id, updatedUser));
+
+                    // Update 'Me' if it's me
+                    if (pb.authStore.model?.id === updatedUser.id) {
+                         if (updatedUser.banned) {
+                            alert("You have been BANNED from the server.");
+                            handleLogout();
+                        } else {
+                            setCurrentUser(prev => prev ? { ...prev, ...updatedUser } : null);
+                        }
+                    }
                 }
             });
         } catch (err) {}
@@ -284,7 +305,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     initUserSub();
 
     return () => { 
-        // Safe unsubscribe
         const cleanup = async () => {
             try {
                await pb.collection('users').unsubscribe('*'); 
@@ -312,6 +332,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     try {
         const password = 'password123';
         
+        // Try create
         try {
             await pb.collection('users').create({
                 username: usernameInput,
@@ -323,10 +344,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             });
         } catch (createError) {}
         
+        // Try auth
         try {
             await pb.collection('users').authWithPassword(usernameInput, password);
         } catch (authError: any) {
-             alert("Login failed: Username taken or error.");
+             alert("Login failed. Username might be taken by someone else.");
              setIsLoading(false);
              return;
         }
@@ -340,6 +362,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 return;
             }
 
+            // Explicitly set online on login
             try {
                 await pb.collection('users').update(model.id, { isOnline: true });
             } catch (e) {}
@@ -354,6 +377,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 avatar: model.avatar ? pb.files.getUrl(model, model.avatar) : undefined
             });
             
+            // Re-fetch users after login to ensure list is populated
             await fetchUsers();
 
              const roomsList = await pb.collection('rooms').getFullList<Room>();

@@ -4,11 +4,12 @@ import { useMIRCContext } from '../context/MIRCContext';
 
 const MusicPlayer: React.FC = () => {
   const { pb } = useMIRCContext();
-  const [currentTrack, setCurrentTrack] = useState("Yükleniyor...");
+  const [currentTrack, setCurrentTrack] = useState("Radyo Hazır");
   const [audioUrl, setAudioUrl] = useState<string>("");
   const [trackList, setTrackList] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   
+  // State
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<boolean>(false);
@@ -27,84 +28,67 @@ const MusicPlayer: React.FC = () => {
       return "";
   };
 
-  const fetchTracks = async () => {
-    try {
-      const records = await pb.collection('room_music').getFullList({
-        sort: '-created',
-        requestKey: null
-      });
-      
-      if (records && records.length > 0) {
-        setTrackList(records);
-        // Only set initial if empty
-        if (audioUrl === "") {
-            const firstTrack = records[0];
-            setCurrentTrack(firstTrack.title || "Radyo");
-            setCurrentIndex(0);
-            setAudioUrl(getTrackSource(firstTrack));
-        }
-      } else {
-        setCurrentTrack("Müzik Yok");
-      }
-    } catch (err: any) {
-        console.log("Music fetch error", err);
-    }
-  };
-
+  // Initial Fetch
   useEffect(() => {
+    const fetchTracks = async () => {
+        try {
+            const records = await pb.collection('room_music').getFullList({
+                sort: '-created',
+                requestKey: null
+            });
+            if (records && records.length > 0) {
+                setTrackList(records);
+                // Pre-load first track info but DO NOT set src yet to avoid auto-download
+                const firstTrack = records[0];
+                setCurrentTrack(firstTrack.title || "Müzik");
+                setCurrentIndex(0);
+                setAudioUrl(getTrackSource(firstTrack));
+            } else {
+                setCurrentTrack("Liste Boş");
+            }
+        } catch (err) {
+            console.log("Music fetch error", err);
+        }
+    };
     fetchTracks();
   }, [pb]);
 
+  // Sync Mute
   useEffect(() => {
     if (audioRef.current) {
         audioRef.current.muted = isMuted;
     }
   }, [isMuted]);
 
-  const attemptPlay = () => {
+  // Unified Play Logic
+  const togglePlay = () => {
       const audio = audioRef.current;
       if (!audio) return;
-      
-      setError(false);
-      setIsLoading(true);
-
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-                setIsPlaying(true);
-                setIsLoading(false);
-            })
-            .catch((e) => {
-                console.warn("Playback blocked or failed:", e);
-                setIsPlaying(false);
-                setIsLoading(false);
-                // Do not show error immediately for autoplay blocks, just show paused state
-            });
-      }
-  };
-
-  const handlePlayPause = () => {
-      const audio = audioRef.current;
-      if (!audio) return;
-
-      if (error) {
-          // Retry logic
-          setError(false);
-          audio.load();
-          attemptPlay();
-          return;
-      }
 
       if (isPlaying) {
           audio.pause();
           setIsPlaying(false);
       } else {
-          attemptPlay();
+          setError(false);
+          setIsLoading(true);
+          const promise = audio.play();
+          
+          if (promise !== undefined) {
+              promise
+              .then(() => {
+                  setIsPlaying(true);
+                  setIsLoading(false);
+              })
+              .catch((e) => {
+                  console.warn("Play blocked:", e);
+                  setIsPlaying(false);
+                  setIsLoading(false);
+                  // Opera/Mobile: Usually means we need a user gesture again.
+                  // Just leave it paused, user will click again.
+              });
+          }
       }
   };
-  
-  const toggleMute = () => setIsMuted(!isMuted);
 
   const handleNext = () => {
     if (trackList && trackList.length > 0) {
@@ -113,29 +97,28 @@ const MusicPlayer: React.FC = () => {
       
       setCurrentIndex(nextIndex);
       setCurrentTrack(nextTrack.title || "Yükleniyor...");
-      const nextUrl = getTrackSource(nextTrack);
       
-      setIsPlaying(false); // Reset UI to paused while loading
+      const nextUrl = getTrackSource(nextTrack);
       setAudioUrl(nextUrl);
+      
+      setIsPlaying(false); 
       setError(false);
       
-      // On mobile, we cannot reliably autoplay next track if the user isn't interacting.
-      // We set state, and if the browser allows (e.g. desktop or Android with setting), it will play via useEffect or onCanPlay.
-      // For strictly blocked browsers (iOS), the user might need to tap again.
-      
-      // Attempt to autoplay after a short delay to let src update
+      // Attempt autoplay, but if browser blocks it, UI remains paused
       setTimeout(() => {
           if (audioRef.current) {
-              attemptPlay();
+              const p = audioRef.current.play();
+              if (p) {
+                  p.then(() => setIsPlaying(true))
+                   .catch(() => setIsPlaying(false)); // Silent fail, wait for user
+              }
           }
-      }, 100);
+      }, 200);
     }
   };
 
-  const handleError = (e: any) => {
-      // Only show error if we actually tried to play and it failed
+  const handleError = () => {
       if (audioUrl) {
-          console.error("Audio tag error:", e);
           setError(true);
           setIsPlaying(false);
           setIsLoading(false);
@@ -157,7 +140,7 @@ const MusicPlayer: React.FC = () => {
         onCanPlay={() => setIsLoading(false)}
         onError={handleError}
         playsInline
-        preload="auto"
+        preload="none" 
       />
       
       {/* Track Info */}
@@ -175,7 +158,7 @@ const MusicPlayer: React.FC = () => {
           <div className="relative overflow-hidden h-4 md:h-5 w-full">
              <div className={`whitespace-nowrap ${isPlaying && !error && !isLoading ? 'animate-marquee' : 'truncate'}`}>
                 <span className={`text-xs md:text-sm font-mono ${error ? 'text-red-300 font-bold' : 'text-pink-400'}`}>
-                    {error ? "Hata! Tıkla" : currentTrack}
+                    {error ? "Hata! Geç" : currentTrack}
                 </span>
              </div>
           </div>
@@ -185,12 +168,12 @@ const MusicPlayer: React.FC = () => {
       <div className="h-4 w-px bg-gray-600 mx-1 hidden md:block"></div>
 
       <div className="flex items-center gap-2 shrink-0">
-        <button onClick={toggleMute} className="hidden md:block text-gray-400 hover:text-white transition-colors">
+        <button onClick={() => setIsMuted(!isMuted)} className="hidden md:block text-gray-400 hover:text-white transition-colors">
           {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
         </button>
 
         <button 
-          onClick={handlePlayPause}
+          onClick={togglePlay}
           className={`p-1.5 md:p-1.5 rounded-full text-white transition-all shadow-md active:scale-95 ${isPlaying ? 'bg-pink-500 hover:bg-pink-600' : 'bg-gray-600 hover:bg-gray-500'}`}
         >
           {error ? <RotateCcw size={14} /> : (isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" />)}
