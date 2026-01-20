@@ -71,13 +71,15 @@ const MusicPlayer: React.FC = () => {
           }
         });
       } catch (err) {
-        // Silent catch
+        // Silent catch for 403 or cancellation errors
       }
     };
 
     subscribe();
     return () => {
-      pb.collection('room_music').unsubscribe('*').catch(() => {});
+      try {
+          pb.collection('room_music').unsubscribe('*').catch(() => {});
+      } catch(_) {}
     };
   }, [pb]); // Added pb dependency
 

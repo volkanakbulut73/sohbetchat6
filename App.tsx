@@ -191,55 +191,80 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
     fetchMessages();
 
-    pb.collection('messages').subscribe('*', function (e) {
-      if (e.action === 'create' && e.record.room === currentRoom.id) {
-        const newMsg = e.record as unknown as Message;
-        setMessages((prev) => [...prev, newMsg]);
-      }
-    });
-
-    pb.collection('rooms').subscribe(currentRoom.id, function (e) {
-        if (e.action === 'update') {
-            setCurrentRoom(e.record as unknown as Room);
-        }
-    });
+    // Secure subscription
+    const initSub = async () => {
+        try {
+            await pb.collection('messages').subscribe('*', function (e) {
+                if (e.action === 'create' && e.record.room === currentRoom.id) {
+                    const newMsg = e.record as unknown as Message;
+                    setMessages((prev) => [...prev, newMsg]);
+                }
+            });
+            await pb.collection('rooms').subscribe(currentRoom.id, function (e) {
+                if (e.action === 'update') {
+                    setCurrentRoom(e.record as unknown as Room);
+                }
+            });
+        } catch (err) { /* Silent fail for permissions */ }
+    };
+    initSub();
 
     return () => { 
-        pb.collection('messages').unsubscribe('*'); 
-        pb.collection('rooms').unsubscribe('*');
+        try {
+            pb.collection('messages').unsubscribe('*'); 
+            pb.collection('rooms').unsubscribe('*');
+        } catch(_) {}
     };
   }, [currentRoom?.id, pb]);
 
-  // 3. User Presence
+  // 3. User Presence & Global Subscription
   useEffect(() => {
     fetchUsers();
     
-    pb.collection('users').subscribe('*', (e) => {
-        fetchUsers();
+    const initUserSub = async () => {
+        try {
+            await pb.collection('users').subscribe('*', (e) => {
+                fetchUsers();
 
-        if (currentUser && e.record.id === currentUser.id && e.action === 'update') {
-            const updatedUser = e.record as unknown as User;
-            
-            if (updatedUser.banned) {
-                alert("You have been BANNED from the server.");
-                handleLogout();
-                return;
-            }
+                // Check authStore model ID directly instead of currentUser state dependency
+                // This prevents the "unsubscribe/subscribe" loop that causes 403s
+                const myId = pb.authStore.model?.id;
 
-            if (updatedUser.isOnline === false) {
-                 alert("You have been kicked from the server.");
-                 handleLogout();
-                 return;
-            }
+                if (myId && e.record.id === myId && e.action === 'update') {
+                    const updatedUser = e.record as unknown as User;
+                    
+                    if (updatedUser.banned) {
+                        alert("You have been BANNED from the server.");
+                        handleLogout();
+                        return;
+                    }
 
-            if (updatedUser.role !== currentUser.role) {
-                setCurrentUser(prev => prev ? ({ ...prev, role: updatedUser.role }) : null);
-            }
+                    if (updatedUser.isOnline === false) {
+                        alert("You have been kicked from the server.");
+                        handleLogout();
+                        return;
+                    }
+
+                    setCurrentUser(prev => {
+                        if (prev && prev.role !== updatedUser.role) {
+                            return { ...prev, role: updatedUser.role };
+                        }
+                        return prev;
+                    });
+                }
+            });
+        } catch (err) {
+            // Ignore subscription errors (403) during auth transitions
         }
-    });
+    };
+    initUserSub();
 
-    return () => { pb.collection('users').unsubscribe('*'); };
-  }, [fetchUsers, currentUser, pb]);
+    return () => { 
+        try {
+            pb.collection('users').unsubscribe('*'); 
+        } catch(_) {}
+    };
+  }, [fetchUsers, pb]); // REMOVED currentUser from dependency array to fix 403 loop
 
   // 4. Auto Clear
   useEffect(() => {
