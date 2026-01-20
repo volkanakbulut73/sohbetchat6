@@ -23,9 +23,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  
+  // Split messages into DB (persistent) and Local (Bot/System) to prevent re-fetches from wiping Bot msgs
+  const [dbMessages, setDbMessages] = useState<Message[]>([]);
+  const [localMessages, setLocalMessages] = useState<Message[]>([]);
+  
   const [users, setUsers] = useState<User[]>([]);
-  // We maintain a Map for quick lookups and easier merging
   const [usersMap, setUsersMap] = useState<Map<string, User>>(new Map());
   const [showMobileUserList, setShowMobileUserList] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -42,6 +45,13 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // --- Helpers ---
   const isModerator = (user: User | null) => user?.role === UserRole.ADMIN || user?.role === UserRole.OPERATOR;
   const isAdmin = (user: User | null) => user?.role === UserRole.ADMIN;
+
+  // Combine DB and Local messages for display
+  const allMessages = useMemo(() => {
+      // Merge and sort by creation time
+      const combined = [...dbMessages, ...localMessages];
+      return combined.sort((a, b) => new Date(a.created).getTime() - new Date(b.created).getTime());
+  }, [dbMessages, localMessages]);
 
   // --- Check for API Key ---
   useEffect(() => {
@@ -81,7 +91,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   // --- Core Data Fetching ---
   
-  // Fetches full list initially and performs filtering
   const fetchUsers = useCallback(async () => {
     const bot: User = { 
         id: 'bot_ai', 
@@ -101,22 +110,17 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         // Silent fail
     }
 
-    const now = new Date();
-    // INCREASED TIMEOUT: Mobile browsers often sleep tabs. 
-    // 5 Minutes (300000ms) prevents users from disappearing when switching apps.
-    const ghostThreshold = new Date(now.getTime() - 5 * 60 * 1000);
-
     const processedUsers = fetchedUsers.map(u => {
-        const lastUpdate = new Date(u.updated);
-        // Only mark offline if they haven't updated in 5 minutes
-        const isGhost = u.isOnline && lastUpdate < ghostThreshold;
+        // VISIBILITY FIX:
+        // Do NOT filter out users based on time difference locally.
+        // Trust the DB 'isOnline' status.
+        // Only override "Me" to ensure I see myself as online.
         
-        // Ensure "Me" is always online locally
         if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
             return { ...u, isOnline: true };
         }
-
-        return isGhost ? { ...u, isOnline: false } : u;
+        
+        return u;
     });
 
     // Ensure 'Me' exists in the list even if DB fetch lags
@@ -158,7 +162,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     // Send immediately on login/mount
     heartbeat();
 
-    const intervalId = setInterval(heartbeat, 30000); // 30 seconds
+    // Use a simpler interval without complex checks
+    const intervalId = setInterval(heartbeat, 30000); 
     return () => clearInterval(intervalId);
   }, [currentUser, pb]);
 
@@ -216,6 +221,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // 2. Room Subscription
   useEffect(() => {
     if (!currentRoom) return;
+    
+    // Clear local bot messages when switching rooms
+    setLocalMessages([]);
 
     const fetchMessages = async () => {
       try {
@@ -224,7 +232,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             sort: '-created',
             expand: 'user',
           });
-          setMessages(msgs.items.reverse());
+          setDbMessages(msgs.items.reverse());
       } catch (e) { console.error("Error loading messages", e); }
     };
     fetchMessages();
@@ -234,11 +242,10 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             await pb.collection('messages').subscribe('*', function (e) {
                 if (e.action === 'create' && e.record.room === currentRoom.id) {
                     const newMsg = e.record as unknown as Message;
-                    // Add message and expand user from our local map if expansion is missing
                     if (!newMsg.expand?.user && newMsg.user) {
                         newMsg.expand = { user: usersMap.get(newMsg.user) };
                     }
-                    setMessages((prev) => [...prev, newMsg]);
+                    setDbMessages((prev) => [...prev, newMsg]);
                 }
             });
             await pb.collection('rooms').subscribe(currentRoom.id, function (e) {
@@ -259,44 +266,28 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         };
         cleanup();
     };
-  }, [currentRoom?.id, pb, usersMap]); // Added usersMap dependency so messages can find users
+  }, [currentRoom?.id, pb, usersMap]); 
 
   // 3. User Presence Subscription - OPTIMIZED
   useEffect(() => {
-    // Initial fetch
     fetchUsers();
     
-    // Backup sweep every 60s
-    const ghostInterval = setInterval(fetchUsers, 60000);
+    // Refresh user list periodically to catch up if subscription misses
+    const refreshInterval = setInterval(fetchUsers, 10000);
 
     const initUserSub = async () => {
         try {
             await pb.collection('users').subscribe('*', (e) => {
-                // IMPORTANT: Do NOT call fetchUsers() here. It's too heavy for every heartbeat.
-                // Instead, update the specific user in the list directly.
+                // If any user updates, just re-fetch the list to be safe and consistent.
+                // Mobile networks might miss individual packets.
+                fetchUsers();
                 
-                if (e.action === 'update' || e.action === 'create') {
+                const myId = pb.authStore.model?.id;
+                if (myId && e.record.id === myId && e.action === 'update') {
                     const updatedUser = e.record as unknown as User;
-                    
-                    setUsers(prevUsers => {
-                        const exists = prevUsers.some(u => u.id === updatedUser.id);
-                        if (exists) {
-                            return prevUsers.map(u => u.id === updatedUser.id ? { ...u, ...updatedUser } : u);
-                        } else {
-                            return [...prevUsers, updatedUser];
-                        }
-                    });
-
-                    setUsersMap(prev => new Map(prev).set(updatedUser.id, updatedUser));
-
-                    // Update 'Me' if it's me
-                    if (pb.authStore.model?.id === updatedUser.id) {
-                         if (updatedUser.banned) {
-                            alert("You have been BANNED from the server.");
-                            handleLogout();
-                        } else {
-                            setCurrentUser(prev => prev ? { ...prev, ...updatedUser } : null);
-                        }
+                     if (updatedUser.banned) {
+                        alert("You have been BANNED from the server.");
+                        handleLogout();
                     }
                 }
             });
@@ -311,14 +302,15 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             } catch (_) {}
         };
         cleanup();
-        clearInterval(ghostInterval);
+        clearInterval(refreshInterval);
     };
   }, [fetchUsers, pb]);
 
   // 4. Auto Clear Msgs
   useEffect(() => {
     const intervalId = setInterval(() => {
-        setMessages([]); 
+        setDbMessages([]); 
+        setLocalMessages([]);
     }, 10 * 60 * 1000);
     return () => clearInterval(intervalId);
   }, []);
@@ -332,7 +324,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     try {
         const password = 'password123';
         
-        // Try create
         try {
             await pb.collection('users').create({
                 username: usernameInput,
@@ -344,7 +335,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             });
         } catch (createError) {}
         
-        // Try auth
         try {
             await pb.collection('users').authWithPassword(usernameInput, password);
         } catch (authError: any) {
@@ -362,7 +352,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 return;
             }
 
-            // Explicitly set online on login
             try {
                 await pb.collection('users').update(model.id, { isOnline: true });
             } catch (e) {}
@@ -377,7 +366,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 avatar: model.avatar ? pb.files.getUrl(model, model.avatar) : undefined
             });
             
-            // Re-fetch users after login to ensure list is populated
             await fetchUsers();
 
              const roomsList = await pb.collection('rooms').getFullList<Room>();
@@ -406,7 +394,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
           } catch (e) {}
       }
       pb.authStore.clear();
-      setMessages([]);
+      setDbMessages([]);
+      setLocalMessages([]);
       setRooms([]);
       setCurrentRoom(null);
       setCurrentUser(null);
@@ -437,32 +426,41 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     }
 
     try {
+        // 1. Send user message to DB
         await pb.collection('messages').create({
             text: text,
             user: currentUser.id,
             room: currentRoom.id
         });
 
+        // 2. Check for Bot Trigger
         const lowerText = text.toLowerCase();
         const shouldTriggerBot = lowerText.includes('gemini') || lowerText.includes('@bot') || lowerText.includes('@ai');
         
         if (shouldTriggerBot) {
-             const history = messages.slice(-5).map(m => `${usersMap.get(m.user)?.username || 'User'}: ${m.text}`);
+             const history = allMessages.slice(-5).map(m => `${usersMap.get(m.user)?.username || 'User'}: ${m.text}`);
              try {
+                // Generate
                 const botResponse = await generateBotResponse(text, history);
+                
+                // Create Bot Message Object
                 const botMsg: Message = {
-                    id: Math.random().toString(),
+                    id: Math.random().toString(), // Temp ID
                     collectionId: 'messages',
                     collectionName: 'messages',
                     created: new Date().toISOString(),
                     updated: new Date().toISOString(),
                     text: botResponse,
-                    user: 'bot_ai',
+                    user: 'bot_ai', // Matches Bot User in list
                     room: currentRoom.id,
                     type: 'text'
                 };
-                setMessages(prev => [...prev, botMsg]);
-             } catch (botError) {}
+
+                // 3. Save to LOCAL state only (persistent against DB refreshes)
+                setLocalMessages(prev => [...prev, botMsg]);
+             } catch (botError) {
+                 console.error(botError);
+             }
         }
     } catch (e) {}
   };
@@ -684,7 +682,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   {currentRoom ? (
                       <>
                           <MessageList 
-                              messages={messages} 
+                              messages={allMessages} 
                               currentUser={currentUser} 
                               usersMap={usersMap}
                           />
