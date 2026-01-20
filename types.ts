@@ -12,6 +12,8 @@ export interface User {
   role: UserRole;
   isOnline: boolean;
   banned?: boolean;
+  created: string;
+  updated: string;
 }
 
 export interface Room {

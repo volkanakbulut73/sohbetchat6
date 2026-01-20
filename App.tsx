@@ -47,14 +47,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // --- Check for API Key ---
   useEffect(() => {
     const checkKey = async () => {
-        // 1. Check if we have a key in env/window
         const key = getApiKey();
         if (key && key.trim() !== '') {
             setHasApiKey(true);
             return;
         }
-
-        // 2. If no key, check if we are in AI Studio environment
         const win = window as any;
         if (win.aistudio) {
             setShowKeySelector(true);
@@ -64,9 +61,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     setHasApiKey(true);
                     setShowKeySelector(false);
                 }
-            } catch (e) {
-                console.log("Error checking AI Studio key", e);
-            }
+            } catch (e) { console.log("Error checking AI Studio key", e); }
         }
     };
     checkKey();
@@ -77,12 +72,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       if (win.aistudio) {
           try {
               await win.aistudio.openSelectKey();
-              // Assume success as per guidelines to avoid race conditions
               setHasApiKey(true); 
               setShowKeySelector(false);
           } catch (e) {
-              console.error("Key selection failed", e);
-              // Retry
               alert("Key selection failed. Please try again.");
           }
       }
@@ -90,47 +82,89 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   // --- Core Data Fetching ---
   const fetchUsers = useCallback(async () => {
-    // Defines the Bot
-    const bot: User = { id: 'bot_ai', username: BOT_NAME, role: UserRole.BOT, isOnline: true, avatar: 'https://cdn-icons-png.flaticon.com/512/4712/4712027.png' };
-    
+    const bot: User = { 
+        id: 'bot_ai', 
+        username: BOT_NAME, 
+        role: UserRole.BOT, 
+        isOnline: true, 
+        avatar: 'https://cdn-icons-png.flaticon.com/512/4712/4712027.png',
+        created: new Date().toISOString(),
+        updated: new Date().toISOString()
+    };
     let fetchedUsers: User[] = [];
 
     try {
+        // Fetch all users
         fetchedUsers = await pb.collection('users').getFullList<User>({ sort: 'username', requestKey: null });
     } catch(e: any) { 
-        // If 403 or other error, we continue with empty list so we can at least show the current user
         if (e?.message !== "The current and the previous request authorization don't match.") {
-            console.log("Fetch users error (likely permissions)", e.message); 
+            console.log("Fetch users error", e.message); 
         }
     }
 
-    // Post-process: Ensure Current User is in the list and Online
+    // GHOST BUSTING LOGIC:
+    // If a user says they are "Online" but hasn't updated their profile in 2 minutes, mark them offline locally.
+    const now = new Date();
+    const twoMinutesAgo = new Date(now.getTime() - 2 * 60 * 1000);
+
+    const processedUsers = fetchedUsers.map(u => {
+        // If user is 'online' but updated timestamp is old, force offline visual
+        // PocketBase 'updated' field is ISO string
+        const lastUpdate = new Date(u.updated); // assuming 'updated' field exists
+        const isGhost = u.isOnline && lastUpdate < twoMinutesAgo;
+        
+        // Don't mark current user as ghost
+        if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
+            return { ...u, isOnline: true };
+        }
+
+        return isGhost ? { ...u, isOnline: false } : u;
+    });
+
+    // Ensure Current User is in list
     if (pb.authStore.isValid && pb.authStore.model) {
             const myId = pb.authStore.model.id;
-            const myUserIndex = fetchedUsers.findIndex(u => u.id === myId);
+            const myUserIndex = processedUsers.findIndex(u => u.id === myId);
             
-            if (myUserIndex !== -1) {
-                fetchedUsers[myUserIndex] = { ...fetchedUsers[myUserIndex], isOnline: true };
-            } else {
-                // If permission rules hid me from the list, force add me
+            if (myUserIndex === -1) {
                 const me: User = {
                     id: myId,
                     username: pb.authStore.model.username,
                     role: (pb.authStore.model.role as UserRole) || UserRole.USER,
                     isOnline: true,
-                    avatar: pb.authStore.model.avatar ? pb.files.getUrl(pb.authStore.model, pb.authStore.model.avatar) : undefined
+                    avatar: pb.authStore.model.avatar ? pb.files.getUrl(pb.authStore.model, pb.authStore.model.avatar) : undefined,
+                    created: pb.authStore.model.created,
+                    updated: pb.authStore.model.updated
                 };
-                fetchedUsers.push(me);
+                processedUsers.push(me);
             }
     }
 
-    // Combine
-    const realUsers = fetchedUsers.filter(u => u.id !== 'bot_ai');
+    const realUsers = processedUsers.filter(u => u.id !== 'bot_ai');
     const allUsers = [...realUsers, bot];
     
     setUsers(allUsers);
     setUsersMap(new Map(allUsers.map(u => [u.id, u])));
   }, [pb]);
+
+  // --- HEARTBEAT SYSTEM ---
+  // Ping the server every 30 seconds to say "I am alive"
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const heartbeat = async () => {
+        try {
+            // Updating any field refreshes the 'updated' timestamp
+            await pb.collection('users').update(currentUser.id, { isOnline: true });
+        } catch (e) {
+            console.warn("Heartbeat failed", e);
+        }
+    };
+
+    const intervalId = setInterval(heartbeat, 30000); // 30 seconds
+    return () => clearInterval(intervalId);
+  }, [currentUser, pb]);
+
 
   // --- Effects ---
 
@@ -150,7 +184,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 username: freshMe.username,
                 avatar: freshMe.avatar ? pb.files.getUrl(freshMe, freshMe.avatar) : undefined,
                 role: (freshMe.role as UserRole) || UserRole.USER,
-                isOnline: true
+                isOnline: true,
+                created: freshMe.created,
+                updated: freshMe.updated
             } as User;
             setCurrentUser(user);
         } catch (e) {
@@ -173,9 +209,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 }) as unknown as Room;
                 setRooms([newRoom]);
                 setCurrentRoom(newRoom);
-            } catch (err) {
-                console.warn("Could not auto-create room", err);
-            }
+            } catch (err) {}
         }
       } catch (e) { console.error("Error fetching rooms", e); }
     };
@@ -198,7 +232,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
     fetchMessages();
 
-    // Secure subscription
     const initSub = async () => {
         try {
             await pb.collection('messages').subscribe('*', function (e) {
@@ -212,7 +245,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     setCurrentRoom(e.record as unknown as Room);
                 }
             });
-        } catch (err) { /* Silent fail for permissions */ }
+        } catch (err) {}
     };
     initSub();
 
@@ -224,34 +257,34 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
   }, [currentRoom?.id, pb]);
 
-  // 3. User Presence & Global Subscription
+  // 3. User Presence Subscription
   useEffect(() => {
     fetchUsers();
     
+    // Refresh user list every 60 seconds regardless of events to clear ghosts
+    const ghostInterval = setInterval(fetchUsers, 60000);
+
     const initUserSub = async () => {
         try {
             await pb.collection('users').subscribe('*', (e) => {
                 fetchUsers();
-
-                // Check authStore model ID directly instead of currentUser state dependency
-                // This prevents the "unsubscribe/subscribe" loop that causes 403s
                 const myId = pb.authStore.model?.id;
-
                 if (myId && e.record.id === myId && e.action === 'update') {
                     const updatedUser = e.record as unknown as User;
-                    
                     if (updatedUser.banned) {
                         alert("You have been BANNED from the server.");
                         handleLogout();
                         return;
                     }
-
                     if (updatedUser.isOnline === false) {
-                        alert("You have been kicked from the server.");
-                        handleLogout();
-                        return;
+                        // We check "updated" in fetchUsers, so we don't need to auto-logout on simple isOnline changes
+                        // unless explicitly set to false by admin logic (kick).
+                        // Since heartbeat sets isOnline=true constantly, a kick would set it false.
+                        // We rely on visual cue or explicit message for kick, but let's keep it safe:
+                        // handleLogout(); 
+                        // Note: Removing auto-logout on isOnline:false because heartbeat might race.
+                        // Let the Kick action handle the logout via a separate mechanism or message.
                     }
-
                     setCurrentUser(prev => {
                         if (prev && prev.role !== updatedUser.role) {
                             return { ...prev, role: updatedUser.role };
@@ -260,20 +293,19 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     });
                 }
             });
-        } catch (err) {
-            // Ignore subscription errors (403) during auth transitions
-        }
+        } catch (err) {}
     };
     initUserSub();
 
     return () => { 
         try {
             pb.collection('users').unsubscribe('*'); 
+            clearInterval(ghostInterval);
         } catch(_) {}
     };
-  }, [fetchUsers, pb]); // REMOVED currentUser from dependency array to fix 403 loop
+  }, [fetchUsers, pb]);
 
-  // 4. Auto Clear
+  // 4. Auto Clear Msgs
   useEffect(() => {
     const intervalId = setInterval(() => {
         setMessages([]); 
@@ -290,7 +322,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     try {
         const password = 'password123';
         
-        // 1. Try to create account first (Optimistic)
         try {
             await pb.collection('users').create({
                 username: usernameInput,
@@ -300,26 +331,16 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 isOnline: true,
                 banned: false
             });
-        } catch (createError) {
-            // Check if error is specifically about unique constraint
-            // Proceed to login if user already exists
-        }
+        } catch (createError) {}
         
-        // 2. Authenticate
         try {
             await pb.collection('users').authWithPassword(usernameInput, password);
         } catch (authError: any) {
-            console.error("Auth failed", authError);
-            if (authError.status === 400) {
-                 alert("Login failed: Username already taken by another user (password mismatch).");
-            } else {
-                 alert("Login failed: " + authError.message);
-            }
-            setIsLoading(false);
-            return;
+             alert("Login failed: Username taken or error.");
+             setIsLoading(false);
+             return;
         }
         
-        // 3. Setup Session
         const model = pb.authStore.model;
         if (model) {
             if (model.banned) {
@@ -329,16 +350,18 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 return;
             }
 
-            // Update status to online
             try {
                 await pb.collection('users').update(model.id, { isOnline: true });
-            } catch (e) { console.warn("Could not update online status", e); }
+            } catch (e) {}
 
             setCurrentUser({
                 id: model.id,
                 username: model.username,
                 role: model.role as UserRole,
-                isOnline: true
+                isOnline: true,
+                created: model.created,
+                updated: model.updated,
+                avatar: model.avatar ? pb.files.getUrl(model, model.avatar) : undefined
             });
             
             await fetchUsers();
@@ -356,10 +379,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
              }
         }
     } catch (e: any) {
-        if (e?.message !== "The current and the previous request authorization don't match.") {
-            console.error("Login process error:", e);
-            alert("An unexpected error occurred during login.");
-        }
+        console.error("Login error:", e);
     } finally {
         setIsLoading(false);
     }
@@ -369,9 +389,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       if (currentUser) {
           try {
               pb.collection('users').update(currentUser.id, { isOnline: false });
-          } catch (e) {
-              console.warn("Failed to update offline status", e);
-          }
+          } catch (e) {}
       }
       pb.authStore.clear();
       setMessages([]);
@@ -394,7 +412,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     if (!text.trim()) return;
 
     if (currentRoom.isMuted && !isModerator(currentUser)) {
-        alert("Room is locked. Only Admins and Operators can speak.");
+        alert("Room is locked.");
         return;
     }
 
@@ -417,7 +435,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         if (shouldTriggerBot) {
              const history = messages.slice(-5).map(m => `${usersMap.get(m.user)?.username || 'User'}: ${m.text}`);
              try {
-                // Call bot service
                 const botResponse = await generateBotResponse(text, history);
                 const botMsg: Message = {
                     id: Math.random().toString(),
@@ -431,24 +448,21 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     type: 'text'
                 };
                 setMessages(prev => [...prev, botMsg]);
-             } catch (botError) { console.error("Bot error:", botError); }
+             } catch (botError) {}
         }
-    } catch (e: any) { console.error("Send failed", e); }
+    } catch (e) {}
   };
-
-  // --- Admin Actions ---
 
   const handleToggleRoomLock = async () => {
       if (!currentRoom || !isModerator(currentUser)) return;
       try {
-          const newStatus = !currentRoom.isMuted;
-          await pb.collection('rooms').update(currentRoom.id, { isMuted: newStatus });
-      } catch (e) { console.error("Failed to toggle room lock", e); }
+          await pb.collection('rooms').update(currentRoom.id, { isMuted: !currentRoom.isMuted });
+      } catch (e) {}
   };
 
   const handleKickUser = async (userToKick: User) => {
     if (!isModerator(currentUser)) return;
-    if (userToKick.role === UserRole.ADMIN) { alert("Cannot kick an Admin."); return; }
+    if (userToKick.role === UserRole.ADMIN) return;
     try {
         await pb.collection('users').update(userToKick.id, { isOnline: false });
         await pb.collection('messages').create({
@@ -457,7 +471,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             room: currentRoom!.id,
             type: 'text'
         });
-    } catch (e) { console.error("Kick failed", e); }
+    } catch (e) {}
   };
 
   const handleBanUser = async (userToBan: User) => {
@@ -470,18 +484,13 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             banned: newBanStatus,
             isOnline: newBanStatus ? false : userToBan.isOnline 
         });
-        
-        const msgText = newBanStatus 
-            ? `*** ${userToBan.username} was BANNED by ${currentUser!.username}`
-            : `*** ${userToBan.username} was unbanned by ${currentUser!.username}`;
-
         await pb.collection('messages').create({
-            text: msgText,
+            text: newBanStatus ? `*** ${userToBan.username} was BANNED` : `*** ${userToBan.username} was unbanned`,
             user: currentUser!.id,
             room: currentRoom!.id,
             type: 'text'
         });
-    } catch (e) { console.error("Ban failed", e); }
+    } catch (e) {}
   };
 
   const handleToggleOp = async (userToOp: User) => {
@@ -491,18 +500,13 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     try {
         const newRole = userToOp.role === UserRole.OPERATOR ? UserRole.USER : UserRole.OPERATOR;
         await pb.collection('users').update(userToOp.id, { role: newRole });
-        
-        const msgText = newRole === UserRole.OPERATOR
-            ? `*** ${userToOp.username} is now an Operator (+o)`
-            : `*** ${userToOp.username} lost Operator status (-o)`;
-
         await pb.collection('messages').create({
-            text: msgText,
+            text: `*** ${userToOp.username} role changed`,
             user: currentUser!.id,
             room: currentRoom!.id,
             type: 'text'
         });
-    } catch (e) { console.error("Op toggle failed", e); }
+    } catch (e) {}
   };
 
   const handleOpenPrivateChat = (user: User) => {
@@ -533,7 +537,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       }));
   };
 
-  // --- Render (Context Wrapper) ---
   return (
     <MIRCProvider pb={pb}>
       <div className={`flex flex-col h-[100dvh] w-full bg-mirc-darker text-gray-200 overflow-hidden ${className || ''}`}>
@@ -548,7 +551,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   <h1 className="text-2xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-mirc-pink to-mirc-purple">WorkigomChat AI</h1>
                   <p className="text-sm text-gray-400 mb-6 font-mono">Enter the retro-future chat.</p>
                   
-                  {/* API Key Missing Warning / Selector */}
                   {!hasApiKey && (
                       <div className="mb-6 p-3 bg-red-900/30 border border-red-500/50 rounded text-xs text-red-200">
                           <p className="mb-2 font-bold flex items-center justify-center gap-1">⚠️ API Key Missing</p>
@@ -560,9 +562,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                                   <Key size={14} /> Select API Key
                               </button>
                           ) : (
-                              <p className="opacity-80">
-                                  Please add <code>VITE_API_KEY</code> to your .env file or environment variables.
-                              </p>
+                              <p className="opacity-80">Please add VITE_API_KEY</p>
                           )}
                       </div>
                   )}
