@@ -100,8 +100,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     }
 
     // GHOST BUSTING LOGIC:
+    // Reduced to 90 seconds (1.5 mins) so users drop from list faster
     const now = new Date();
-    const ghostThreshold = new Date(now.getTime() - 5 * 60 * 1000);
+    const ghostThreshold = new Date(now.getTime() - 1.5 * 60 * 1000);
 
     const processedUsers = fetchedUsers.map(u => {
         const lastUpdate = new Date(u.updated);

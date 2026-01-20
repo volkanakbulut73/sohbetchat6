@@ -10,10 +10,8 @@ const MusicPlayer: React.FC = () => {
   const [currentIndex, setCurrentIndex] = useState(0);
   
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isBuffering, setIsBuffering] = useState(false); 
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -30,8 +28,6 @@ const MusicPlayer: React.FC = () => {
 
   const fetchTracks = async () => {
     try {
-      setIsLoading(true);
-      setError(null);
       const records = await pb.collection('room_music').getFullList({
         sort: '-created',
         requestKey: null
@@ -39,19 +35,18 @@ const MusicPlayer: React.FC = () => {
       
       if (records && records.length > 0) {
         setTrackList(records);
+        // Only set initial track if not playing
         if (!isPlaying && audioUrl === "") {
             const firstTrack = records[0];
-            setCurrentTrack(firstTrack.title || "İsimsiz Şarkı");
+            setCurrentTrack(firstTrack.title || "Radyo");
             setCurrentIndex(0);
             setAudioUrl(getTrackSource(firstTrack));
         }
       } else {
-        setCurrentTrack("Müzik Listesi Boş");
+        setCurrentTrack("Liste Boş");
       }
     } catch (err: any) {
-        // Silent error
-    } finally {
-        setIsLoading(false);
+        console.log("Music fetch error");
     }
   };
 
@@ -65,40 +60,33 @@ const MusicPlayer: React.FC = () => {
     }
   }, [isMuted]);
 
-  // STRICT MOBILE PLAY LOGIC
-  // We must call play() immediately within the click handler context.
-  // No async/await before the play() call if possible.
-  const togglePlay = () => {
+  // ULTRA SIMPLE PLAY HANDLER FOR MOBILE
+  const handlePlayClick = () => {
       const audio = audioRef.current;
       if (!audio) return;
-
-      if (error) {
-          // If in error state, click tries to fix/next it
-          handleNext();
-          return;
-      }
 
       if (isPlaying) {
           audio.pause();
           setIsPlaying(false);
-          setIsBuffering(false);
       } else {
-          setIsBuffering(true);
           setError(null);
-          
-          // CRITICAL: Call play() synchronously and handle the promise rejection separately.
-          const playPromise = audio.play();
-          
-          if (playPromise !== undefined) {
-              playPromise.then(() => {
-                  setIsPlaying(true);
-                  setIsBuffering(false);
-              }).catch(err => {
-                  console.error("Play error:", err);
-                  setIsPlaying(false);
-                  setIsBuffering(false);
-                  setError("Başlat");
-              });
+          // Critical for Mobile: Load then Play in the same tick
+          try {
+            audio.load(); 
+            const promise = audio.play();
+            if (promise !== undefined) {
+                promise
+                .then(() => {
+                    setIsPlaying(true);
+                })
+                .catch((e) => {
+                    console.error("Autoplay/Play error", e);
+                    setIsPlaying(false);
+                    setError("Başlatılamadı");
+                });
+            }
+          } catch (e) {
+              setIsPlaying(false);
           }
       }
   };
@@ -111,21 +99,18 @@ const MusicPlayer: React.FC = () => {
       const nextTrack = trackList[nextIndex];
       
       setCurrentIndex(nextIndex);
-      setCurrentTrack(nextTrack.title || "İsimsiz Şarkı");
+      setCurrentTrack(nextTrack.title || "Sıradaki Şarkı");
       const nextUrl = getTrackSource(nextTrack);
       
-      if (audioRef.current) {
-          audioRef.current.pause();
-          setIsPlaying(false);
-      }
+      setIsPlaying(false); // Stop UI
+      setAudioUrl(nextUrl); // Change Source
       
-      setAudioUrl(nextUrl);
-      setError(null);
-      // We don't auto-play on mobile next click to be safe, 
-      // or we rely on user clicking play again if browser blocks it.
-      // But we set buffering to indicate change.
-      setIsBuffering(false); 
-      setIsPlaying(false);
+      // Allow DOM to update src, then try play
+      setTimeout(() => {
+          if (audioRef.current) {
+              handlePlayClick(); // Try to play new track
+          }
+      }, 500);
     }
   };
 
@@ -134,23 +119,24 @@ const MusicPlayer: React.FC = () => {
         flex items-center gap-2 p-1 px-3 md:p-2 md:px-4 rounded-full border backdrop-blur-md shadow-lg select-none transition-colors max-w-[180px] md:max-w-none
         ${error ? 'bg-red-900/60 border-red-500/50' : 'bg-black/60 border-cyan-500/30'}
     `}>
+      {/* 
+         Removed crossOrigin to prevent CORS blocking on some mobile browsers.
+         Added playsInline for iOS.
+      */}
       <audio 
-        key={audioUrl}
         ref={audioRef} 
-        src={audioUrl || undefined} 
+        src={audioUrl} 
         onEnded={handleNext} 
-        onPlaying={() => { setIsBuffering(false); setIsPlaying(true); }}
-        onWaiting={() => setIsBuffering(true)}
-        preload="none" 
-        crossOrigin="anonymous"
+        onPause={() => setIsPlaying(false)}
+        onPlay={() => setIsPlaying(true)}
+        onError={() => { setIsPlaying(false); setError("Hata"); }}
         playsInline
+        preload="auto"
       />
       
       {/* Track Info */}
       <div className="flex items-center space-x-2 md:space-x-3 text-cyan-400 overflow-hidden flex-1 md:flex-initial">
-        {isLoading || isBuffering ? (
-             <Loader2 size={16} className="animate-spin text-mirc-pink shrink-0" />
-        ) : error ? (
+        {error ? (
             <AlertCircle size={16} className="text-red-400 shrink-0" />
         ) : (
             <Radio size={16} className={`shrink-0 ${isPlaying ? "animate-pulse text-mirc-pink" : ""}`} />
@@ -159,9 +145,9 @@ const MusicPlayer: React.FC = () => {
         <div className="flex flex-col overflow-hidden w-20 md:w-32">
           <span className="text-[8px] md:text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-none hidden md:block">mIRC RADIO</span>
           <div className="relative overflow-hidden h-4 md:h-5 w-full">
-             <div className={`whitespace-nowrap ${isPlaying && !error && !isBuffering ? 'animate-marquee' : 'truncate'}`}>
+             <div className={`whitespace-nowrap ${isPlaying && !error ? 'animate-marquee' : 'truncate'}`}>
                 <span className={`text-xs md:text-sm font-mono ${error ? 'text-red-300 font-bold' : 'text-pink-400'}`}>
-                    {error || (isBuffering ? "Yükleniyor..." : currentTrack)}
+                    {error || currentTrack}
                 </span>
              </div>
           </div>
@@ -176,10 +162,10 @@ const MusicPlayer: React.FC = () => {
         </button>
 
         <button 
-          onClick={togglePlay}
-          className={`p-1.5 md:p-1.5 rounded-full text-white transition-all shadow-md active:scale-95 ${isPlaying || isBuffering ? 'bg-pink-500 hover:bg-pink-600' : 'bg-gray-600 hover:bg-gray-500'}`}
+          onClick={handlePlayClick}
+          className={`p-1.5 md:p-1.5 rounded-full text-white transition-all shadow-md active:scale-95 ${isPlaying ? 'bg-pink-500 hover:bg-pink-600' : 'bg-gray-600 hover:bg-gray-500'}`}
         >
-          {isBuffering ? <Loader2 size={14} className="animate-spin" /> : (isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" />)}
+          {isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" />}
         </button>
 
         <button onClick={handleNext} className="text-gray-400 hover:text-cyan-400 transition-colors p-1">
