@@ -35,7 +35,6 @@ const MusicPlayer: React.FC = () => {
       
       if (records && records.length > 0) {
         setTrackList(records);
-        // Only set initial track if not playing
         if (!isPlaying && audioUrl === "") {
             const firstTrack = records[0];
             setCurrentTrack(firstTrack.title || "Radyo");
@@ -44,6 +43,7 @@ const MusicPlayer: React.FC = () => {
         }
       } else {
         setCurrentTrack("Liste Boş");
+        setError(null);
       }
     } catch (err: any) {
         console.log("Music fetch error");
@@ -60,7 +60,7 @@ const MusicPlayer: React.FC = () => {
     }
   }, [isMuted]);
 
-  // ULTRA SIMPLE PLAY HANDLER FOR MOBILE
+  // Handle Play Button
   const handlePlayClick = () => {
       const audio = audioRef.current;
       if (!audio) return;
@@ -70,23 +70,21 @@ const MusicPlayer: React.FC = () => {
           setIsPlaying(false);
       } else {
           setError(null);
-          // Critical for Mobile: Load then Play in the same tick
-          try {
-            audio.load(); 
-            const promise = audio.play();
-            if (promise !== undefined) {
-                promise
+          // Just call play. Do not call load() here to avoid interrupting mobile buffers.
+          const promise = audio.play();
+          
+          if (promise !== undefined) {
+              promise
                 .then(() => {
                     setIsPlaying(true);
+                    setError(null);
                 })
                 .catch((e) => {
-                    console.error("Autoplay/Play error", e);
+                    console.error("Play error:", e);
                     setIsPlaying(false);
-                    setError("Başlatılamadı");
+                    // Mobile requires user gesture. If this fails, it might be format or network.
+                    setError("Hata"); 
                 });
-            }
-          } catch (e) {
-              setIsPlaying(false);
           }
       }
   };
@@ -99,19 +97,36 @@ const MusicPlayer: React.FC = () => {
       const nextTrack = trackList[nextIndex];
       
       setCurrentIndex(nextIndex);
-      setCurrentTrack(nextTrack.title || "Sıradaki Şarkı");
+      setCurrentTrack(nextTrack.title || "Sıradaki...");
       const nextUrl = getTrackSource(nextTrack);
       
-      setIsPlaying(false); // Stop UI
-      setAudioUrl(nextUrl); // Change Source
+      // Update state
+      setAudioUrl(nextUrl);
+      setError(null);
+      setIsPlaying(true); // Optimistically set playing
       
-      // Allow DOM to update src, then try play
+      // Use small timeout to allow React to update the DOM src attribute
       setTimeout(() => {
           if (audioRef.current) {
-              handlePlayClick(); // Try to play new track
+              const promise = audioRef.current.play();
+              if (promise) {
+                  promise.catch(() => {
+                      setIsPlaying(false);
+                      setError("Oynatılamadı");
+                  });
+              }
           }
-      }, 500);
+      }, 100);
     }
+  };
+
+  // If error occurs (e.g. 404 or codec), try next song automatically
+  const handleError = () => {
+      console.log("Audio Error occurred, skipping...");
+      setError("Hata");
+      setIsPlaying(false);
+      // Optional: Auto skip to next if one fails
+      // setTimeout(handleNext, 1000); 
   };
 
   return (
@@ -119,19 +134,15 @@ const MusicPlayer: React.FC = () => {
         flex items-center gap-2 p-1 px-3 md:p-2 md:px-4 rounded-full border backdrop-blur-md shadow-lg select-none transition-colors max-w-[180px] md:max-w-none
         ${error ? 'bg-red-900/60 border-red-500/50' : 'bg-black/60 border-cyan-500/30'}
     `}>
-      {/* 
-         Removed crossOrigin to prevent CORS blocking on some mobile browsers.
-         Added playsInline for iOS.
-      */}
       <audio 
         ref={audioRef} 
         src={audioUrl} 
         onEnded={handleNext} 
         onPause={() => setIsPlaying(false)}
-        onPlay={() => setIsPlaying(true)}
-        onError={() => { setIsPlaying(false); setError("Hata"); }}
+        onPlay={() => { setIsPlaying(true); setError(null); }}
+        onError={handleError}
         playsInline
-        preload="auto"
+        preload="metadata"
       />
       
       {/* Track Info */}
