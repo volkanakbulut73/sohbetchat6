@@ -94,15 +94,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     try {
         fetchedUsers = await pb.collection('users').getFullList<User>({ sort: 'username', requestKey: null });
     } catch(e: any) { 
-        if (e?.message !== "The current and the previous request authorization don't match.") {
-            console.log("Fetch users error", e.message); 
-        }
+        // Silent fail for expected auth mismatches
     }
 
     // GHOST BUSTING LOGIC:
-    // Reduced to 60 seconds (1 min) so users drop from list faster
     const now = new Date();
-    const ghostThreshold = new Date(now.getTime() - 60 * 1000);
+    const ghostThreshold = new Date(now.getTime() - 60 * 1000); // 1 minute offline timeout
 
     const processedUsers = fetchedUsers.map(u => {
         const lastUpdate = new Date(u.updated);
@@ -148,9 +145,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         try {
             await pb.collection('users').update(currentUser.id, { isOnline: true });
         } catch (e) {
-            console.warn("Heartbeat failed", e);
+            // Heartbeat failed, likely network
         }
     };
+    
+    // Initial heartbeat
+    heartbeat();
 
     const intervalId = setInterval(heartbeat, 30000); // 30 seconds
     return () => clearInterval(intervalId);
@@ -241,10 +241,14 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     initSub();
 
     return () => { 
-        try {
-            pb.collection('messages').unsubscribe('*'); 
-            pb.collection('rooms').unsubscribe('*');
-        } catch(_) {}
+        // Safe unsubscribe
+        const cleanup = async () => {
+            try {
+                await pb.collection('messages').unsubscribe('*'); 
+                await pb.collection('rooms').unsubscribe('*');
+            } catch(_) {}
+        };
+        cleanup();
     };
   }, [currentRoom?.id, pb]);
 
@@ -280,10 +284,14 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     initUserSub();
 
     return () => { 
-        try {
-            pb.collection('users').unsubscribe('*'); 
-            clearInterval(ghostInterval);
-        } catch(_) {}
+        // Safe unsubscribe
+        const cleanup = async () => {
+            try {
+               await pb.collection('users').unsubscribe('*'); 
+            } catch (_) {}
+        };
+        cleanup();
+        clearInterval(ghostInterval);
     };
   }, [fetchUsers, pb]);
 
