@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPocketBaseClient } from './services/pocketbase';
 import { MIRCProvider } from './context/MIRCContext';
 import { User, Room, Message, PrivateMessage, UserRole } from './types';
@@ -46,6 +46,18 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // Private Chats
   const [activePMs, setActivePMs] = useState<User[]>([]);
   const [privateMessages, setPrivateMessages] = useState<Record<string, PrivateMessage[]>>({});
+
+  // --- Refs ---
+  // We use refs to access the latest state inside subscription callbacks 
+  // without triggering re-renders or resetting subscriptions unnecessarily.
+  const usersMapRef = useRef(usersMap);
+  const currentUserRef = useRef(currentUser);
+  
+  // Fix for disappearing bot messages: Track the last loaded room ID
+  const lastRoomIdRef = useRef<string | null>(null);
+
+  useEffect(() => { usersMapRef.current = usersMap; }, [usersMap]);
+  useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
 
   // --- Helpers ---
   const isModerator = (user: User | null) => user?.role === UserRole.ADMIN || user?.role === UserRole.OPERATOR;
@@ -231,8 +243,13 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   useEffect(() => {
     if (!currentRoom || !currentUser) return; // Stop if no room OR no user
     
-    // Clear local bot messages when switching rooms
-    setLocalMessages([]);
+    // Critical Fix: Only clear messages if the ROOM actually changed.
+    // This prevents clearing Bot messages when other effects run.
+    if (lastRoomIdRef.current !== currentRoom.id) {
+        setLocalMessages([]);
+        setDbMessages([]); // Optional: Clear DB messages while loading new ones for cleaner switch
+        lastRoomIdRef.current = currentRoom.id;
+    }
 
     const fetchMessages = async () => {
       try {
@@ -251,8 +268,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             await pb.collection('messages').subscribe('*', function (e) {
                 if (e.action === 'create' && e.record.room === currentRoom.id) {
                     const newMsg = e.record as unknown as Message;
+                    // Use ref to get latest users map without re-running effect
                     if (!newMsg.expand?.user && newMsg.user) {
-                        newMsg.expand = { user: usersMap.get(newMsg.user) };
+                        newMsg.expand = { user: usersMapRef.current.get(newMsg.user) };
                     }
                     setDbMessages((prev) => [...prev, newMsg]);
                 }
@@ -275,7 +293,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         };
         cleanup();
     };
-  }, [currentRoom?.id, pb, usersMap, currentUser]); 
+  }, [currentRoom?.id, pb]); 
 
   // 3. User Presence Subscription
   useEffect(() => {
@@ -316,9 +334,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // 4. Auto Clear Msgs
   useEffect(() => {
     const intervalId = setInterval(() => {
+        // Only clear DB messages periodically to save memory, 
+        // but maybe we shouldn't wipe Local messages aggressively?
+        // Let's just clear DB messages to be safe.
         setDbMessages([]); 
-        setLocalMessages([]);
-    }, 10 * 60 * 1000);
+        // We'll keep local bot messages a bit longer or let user clear them manually by room switch
+    }, 20 * 60 * 1000);
     return () => clearInterval(intervalId);
   }, []);
 
@@ -455,7 +476,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         const shouldTriggerBot = lowerText.includes('gemini') || lowerText.includes('@bot') || lowerText.includes('@ai');
         
         if (shouldTriggerBot) {
-             const history = allMessages.slice(-5).map(m => `${usersMap.get(m.user)?.username || 'User'}: ${m.text}`);
+             const history = allMessages.slice(-5).map(m => `${usersMapRef.current.get(m.user)?.username || 'User'}: ${m.text}`);
              try {
                 // Generate
                 const botResponse = await generateBotResponse(text, history);
@@ -724,7 +745,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   </div>
               </div>
 
-              <div className="mx-1 shrink-0">
+              <div className="mx-1 shrink-0 hidden md:block">
                   <MusicPlayer />
               </div>
 

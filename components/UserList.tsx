@@ -51,8 +51,9 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
-  // Filter: Only show Online, Bots, or Self. Hide others.
-  const visibleUsers = users.filter(u => u.isOnline || u.role === UserRole.BOT || u.id === currentUserId);
+  // Filter: Show ALL users that are fetched.
+  // Note: If you don't see users, check PocketBase API Rules for "List/Search".
+  const visibleUsers = users;
 
   // Sort: Admin > Op > Bot > Online > Offline > Name
   const sortedUsers = [...visibleUsers].sort((a, b) => {
