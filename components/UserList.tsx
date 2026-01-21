@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle } from 'lucide-react';
+import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle, AlertTriangle } from 'lucide-react';
 
 interface UserListProps {
   users: User[];
@@ -39,8 +39,11 @@ const UserList: React.FC<UserListProps> = ({
     }
   };
 
-  const getRoleColor = (user: User) => {
+  const getRoleColor = (user: User, isMe: boolean) => {
     if (user.banned) return "text-red-500 line-through decoration-2";
+    // Force Online color if it's me, regardless of server status delay
+    if (isMe) return "text-green-400 font-semibold";
+    
     if (!user.isOnline && user.role !== UserRole.BOT) return "text-gray-500"; 
 
     switch (user.role) {
@@ -51,21 +54,27 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
-  // Pre-process users to ensure current user is ALWAYS visually online
-  const processedUsers = users.map(u => ({
-      ...u,
-      isOnline: u.id === currentUserId ? true : u.isOnline
-  }));
+  // Visual Override: Current User is ALWAYS online in the sorted logic
+  const sortedUsers = [...users].sort((a, b) => {
+      // Force "Me" to be treated as online for sorting
+      const aOnline = a.id === currentUserId ? true : a.isOnline;
+      const bOnline = b.id === currentUserId ? true : b.isOnline;
 
-  // Sort: Admin > Op > Bot > Online > Offline > Name
-  const sortedUsers = [...processedUsers].sort((a, b) => {
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
+      
+      // Role Priority
       if (roles[a.role] !== roles[b.role]) return roles[a.role] - roles[b.role];
-      if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+      
+      // Online Priority
+      if (aOnline !== bOnline) return aOnline ? -1 : 1;
+      
+      // Name Priority
       return a.username.localeCompare(b.username);
   });
 
-  const onlineCount = sortedUsers.filter(u => u.isOnline || u.role === UserRole.BOT).length;
+  // Calculate counts (treating self as online)
+  const onlineCount = users.filter(u => u.id === currentUserId || u.isOnline || u.role === UserRole.BOT).length;
+  
   const canKick = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.OPERATOR;
   const canBan = currentUserRole === UserRole.ADMIN;
   const canOp = currentUserRole === UserRole.ADMIN;
@@ -80,7 +89,18 @@ const UserList: React.FC<UserListProps> = ({
       </div>
       
       <div className="flex-1 overflow-y-auto p-1 md:p-2 space-y-0.5">
+        {users.length <= 2 && (
+             <div className="p-2 text-[10px] text-gray-500 bg-slate-800/50 rounded mb-2 border border-slate-700/50">
+                <p className="flex items-center gap-1 mb-1 text-orange-400"><AlertTriangle size={10} /> Tip:</p>
+                If you don't see others, check PocketBase: <b>Settings &gt; API Rules &gt; Users &gt; List Rule</b> (Set to empty).
+             </div>
+        )}
+
         {sortedUsers.map((user) => {
+            const isMe = user.id === currentUserId;
+            // Force visual online status for self
+            const isOnline = isMe ? true : user.isOnline;
+
             return (
               <div
                 key={user.id}
@@ -88,7 +108,7 @@ const UserList: React.FC<UserListProps> = ({
                 onDoubleClick={() => onOpenPrivateChat(user)}
                 className={`
                     group flex items-center space-x-2 p-1.5 md:p-2 rounded cursor-pointer transition-all
-                    ${user.isOnline ? 'hover:bg-white/5 opacity-100' : 'opacity-50 hover:opacity-100 hover:bg-white/5 grayscale'} 
+                    ${isOnline ? 'hover:bg-white/5 opacity-100' : 'opacity-50 hover:opacity-100 hover:bg-white/5 grayscale'} 
                     border border-transparent hover:border-white/10
                 `}
               >
@@ -103,17 +123,18 @@ const UserList: React.FC<UserListProps> = ({
                         {user.role !== UserRole.USER ? (
                             getRoleIcon(user.role)
                         ) : (
-                            <Circle size={8} className={user.isOnline ? "fill-green-500 text-green-500" : "fill-gray-500 text-gray-500"} />
+                            <Circle size={8} className={isOnline ? "fill-green-500 text-green-500" : "fill-gray-500 text-gray-500"} />
                         )}
                     </div>
                 </div>
                 
                 <div className="flex flex-col overflow-hidden">
-                    <span className={`text-xs md:text-sm truncate font-medium ${getRoleColor(user)}`}>
+                    <span className={`text-xs md:text-sm truncate font-medium ${getRoleColor(user, isMe)}`}>
                         {user.username}
-                        {user.id === currentUserId && <span className="ml-1 text-[9px] text-gray-500 font-normal">(You)</span>}
+                        {isMe && <span className="ml-1 text-[9px] text-gray-400 font-normal">(You)</span>}
                     </span>
-                    {!user.isOnline && user.role !== UserRole.BOT && (
+                    {/* Only show 'Away' if it's NOT the current user AND they are offline */}
+                    {!isOnline && user.role !== UserRole.BOT && (
                         <span className="text-[9px] text-gray-500 uppercase font-bold leading-none">Away</span>
                     )}
                 </div>

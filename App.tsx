@@ -48,13 +48,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [privateMessages, setPrivateMessages] = useState<Record<string, PrivateMessage[]>>({});
 
   // --- Refs ---
-  // We use refs to access the latest state inside subscription callbacks 
-  // without triggering re-renders or resetting subscriptions unnecessarily.
   const usersMapRef = useRef(usersMap);
   const currentUserRef = useRef(currentUser);
   
-  // Fix for disappearing bot messages: Track the last loaded room ID
-  const lastRoomIdRef = useRef<string | null>(null);
+  // Track previous room ID to handle switching strictly
+  const prevRoomIdRef = useRef<string | null>(null);
 
   useEffect(() => { usersMapRef.current = usersMap; }, [usersMap]);
   useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
@@ -127,7 +125,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     try {
         fetchedUsers = await pb.collection('users').getFullList<User>({ sort: 'username', requestKey: null });
     } catch(e: any) { 
-        // Silent fail
+        // Silent fail - usually means list rule is locked
     }
 
     const processedUsers = fetchedUsers.map(u => {
@@ -239,17 +237,18 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       loadRooms();
   }, [pb, currentUser]);
 
-  // 2. Room Subscription & Message Fetching
+  // 2. Strict Room Switch Logic (Clears chat ONLY when room changes)
   useEffect(() => {
-    if (!currentRoom || !currentUser) return; // Stop if no room OR no user
-    
-    // Critical Fix: Only clear messages if the ROOM actually changed.
-    // This prevents clearing Bot messages when other effects run.
-    if (lastRoomIdRef.current !== currentRoom.id) {
-        setLocalMessages([]);
-        setDbMessages([]); // Optional: Clear DB messages while loading new ones for cleaner switch
-        lastRoomIdRef.current = currentRoom.id;
-    }
+      if (currentRoom?.id && prevRoomIdRef.current !== currentRoom.id) {
+          setLocalMessages([]);
+          setDbMessages([]);
+          prevRoomIdRef.current = currentRoom.id;
+      }
+  }, [currentRoom?.id]);
+
+  // 3. Message Subscription (Does NOT clear chat)
+  useEffect(() => {
+    if (!currentRoom || !currentUser) return;
 
     const fetchMessages = async () => {
       try {
@@ -261,18 +260,24 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
           setDbMessages(msgs.items.reverse());
       } catch (e) { console.error("Error loading messages", e); }
     };
+    // Only fetch initially when room ID changes (or on mount)
     fetchMessages();
 
     const initSub = async () => {
         try {
             await pb.collection('messages').subscribe('*', function (e) {
+                // IMPORTANT: Check if the message belongs to CURRENT room
+                // We use currentRoom.id directly here as closure, which is fine since effect re-runs on room change
                 if (e.action === 'create' && e.record.room === currentRoom.id) {
                     const newMsg = e.record as unknown as Message;
-                    // Use ref to get latest users map without re-running effect
                     if (!newMsg.expand?.user && newMsg.user) {
                         newMsg.expand = { user: usersMapRef.current.get(newMsg.user) };
                     }
-                    setDbMessages((prev) => [...prev, newMsg]);
+                    setDbMessages((prev) => {
+                        // Avoid duplicates
+                        if (prev.find(m => m.id === newMsg.id)) return prev;
+                        return [...prev, newMsg];
+                    });
                 }
             });
             await pb.collection('rooms').subscribe(currentRoom.id, function (e) {
@@ -295,7 +300,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
   }, [currentRoom?.id, pb]); 
 
-  // 3. User Presence Subscription
+  // 4. User Presence Subscription
   useEffect(() => {
     if (!currentUser) return; // Only fetch users if logged in
 
@@ -331,15 +336,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
   }, [fetchUsers, pb, currentUser]);
 
-  // 4. Auto Clear Msgs
+  // 5. Auto Clear Msgs (Slow cleanup)
   useEffect(() => {
     const intervalId = setInterval(() => {
-        // Only clear DB messages periodically to save memory, 
-        // but maybe we shouldn't wipe Local messages aggressively?
-        // Let's just clear DB messages to be safe.
         setDbMessages([]); 
-        // We'll keep local bot messages a bit longer or let user clear them manually by room switch
-    }, 20 * 60 * 1000);
+        // We keep local messages to avoid user frustration
+    }, 60 * 60 * 1000); // 1 hour
     return () => clearInterval(intervalId);
   }, []);
 
