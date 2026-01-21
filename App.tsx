@@ -92,6 +92,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // --- Core Data Fetching ---
   
   const fetchUsers = useCallback(async () => {
+    // Only fetch if logged in to avoid 403s on login screen
+    if (!pb.authStore.isValid) return;
+
     const bot: User = { 
         id: 'bot_ai', 
         username: BOT_NAME, 
@@ -111,19 +114,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     }
 
     const processedUsers = fetchedUsers.map(u => {
-        // VISIBILITY FIX:
-        // Do NOT filter out users based on time difference locally.
-        // Trust the DB 'isOnline' status.
-        // Only override "Me" to ensure I see myself as online.
-        
         if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
             return { ...u, isOnline: true };
         }
-        
         return u;
     });
 
-    // Ensure 'Me' exists in the list even if DB fetch lags
     if (pb.authStore.isValid && pb.authStore.model) {
         const myId = pb.authStore.model.id;
         if (!processedUsers.find(u => u.id === myId)) {
@@ -162,7 +158,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     // Send immediately on login/mount
     heartbeat();
 
-    // Use a simpler interval without complex checks
     const intervalId = setInterval(heartbeat, 30000); 
     return () => clearInterval(intervalId);
   }, [currentUser, pb]);
@@ -170,7 +165,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   // --- Effects ---
 
-  // 1. Initial Load
+  // 1. Initial Load (Auth Check)
   useEffect(() => {
     const init = async () => {
       if (pb.authStore.isValid && pb.authStore.model) {
@@ -195,32 +190,41 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             pb.authStore.clear();
         }
       }
-
-      try {
-        const roomsList = await pb.collection('rooms').getFullList<Room>({ sort: 'created' });
-        setRooms(roomsList);
-        
-        if (roomsList.length > 0) {
-            setCurrentRoom(roomsList[0]);
-        } else if (pb.authStore.isValid) {
-            try {
-                const newRoom = await pb.collection('rooms').create({
-                    name: 'General',
-                    topic: 'The lobby',
-                    isMuted: false
-                }) as unknown as Room;
-                setRooms([newRoom]);
-                setCurrentRoom(newRoom);
-            } catch (err) {}
-        }
-      } catch (e) { console.error("Error fetching rooms", e); }
     };
     init();
   }, [pb]);
 
-  // 2. Room Subscription
+  // 1.5 Fetch Rooms (Only if logged in)
   useEffect(() => {
-    if (!currentRoom) return;
+      if (!currentUser) return; // Don't fetch rooms if not logged in
+
+      const loadRooms = async () => {
+        try {
+            const roomsList = await pb.collection('rooms').getFullList<Room>({ sort: 'created' });
+            setRooms(roomsList);
+            
+            if (roomsList.length > 0) {
+                // Only set current room if not already set, to prevent jumping
+                setCurrentRoom(prev => prev || roomsList[0]);
+            } else if (pb.authStore.isValid) {
+                try {
+                    const newRoom = await pb.collection('rooms').create({
+                        name: 'General',
+                        topic: 'The lobby',
+                        isMuted: false
+                    }) as unknown as Room;
+                    setRooms([newRoom]);
+                    setCurrentRoom(newRoom);
+                } catch (err) {}
+            }
+        } catch (e) { console.error("Error fetching rooms", e); }
+      };
+      loadRooms();
+  }, [pb, currentUser]);
+
+  // 2. Room Subscription & Message Fetching
+  useEffect(() => {
+    if (!currentRoom || !currentUser) return; // Stop if no room OR no user
     
     // Clear local bot messages when switching rooms
     setLocalMessages([]);
@@ -266,20 +270,18 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         };
         cleanup();
     };
-  }, [currentRoom?.id, pb, usersMap]); 
+  }, [currentRoom?.id, pb, usersMap, currentUser]); 
 
-  // 3. User Presence Subscription - OPTIMIZED
+  // 3. User Presence Subscription
   useEffect(() => {
+    if (!currentUser) return; // Only fetch users if logged in
+
     fetchUsers();
-    
-    // Refresh user list periodically to catch up if subscription misses
     const refreshInterval = setInterval(fetchUsers, 10000);
 
     const initUserSub = async () => {
         try {
             await pb.collection('users').subscribe('*', (e) => {
-                // If any user updates, just re-fetch the list to be safe and consistent.
-                // Mobile networks might miss individual packets.
                 fetchUsers();
                 
                 const myId = pb.authStore.model?.id;
@@ -304,7 +306,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         cleanup();
         clearInterval(refreshInterval);
     };
-  }, [fetchUsers, pb]);
+  }, [fetchUsers, pb, currentUser]);
 
   // 4. Auto Clear Msgs
   useEffect(() => {
@@ -320,27 +322,30 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const handleLogin = async () => {
     if (!usernameInput || isLoading) return;
     setIsLoading(true);
+    const password = 'password123';
 
     try {
-        const password = 'password123';
-        
+        // Try Login FIRST
         try {
-            await pb.collection('users').create({
-                username: usernameInput,
-                password: password,
-                passwordConfirm: password,
-                role: 'user',
-                isOnline: true,
-                banned: false
-            });
-        } catch (createError) {}
-        
-        try {
-            await pb.collection('users').authWithPassword(usernameInput, password);
-        } catch (authError: any) {
-             alert("Login failed. Username might be taken by someone else.");
-             setIsLoading(false);
-             return;
+             await pb.collection('users').authWithPassword(usernameInput, password);
+        } catch (loginErr) {
+             // If Login Fails, Try Create
+             try {
+                await pb.collection('users').create({
+                    username: usernameInput,
+                    password: password,
+                    passwordConfirm: password,
+                    role: 'user',
+                    isOnline: true,
+                    banned: false
+                });
+                // Then Login Again
+                await pb.collection('users').authWithPassword(usernameInput, password);
+             } catch (createErr) {
+                 alert("Login failed. Username might be taken or invalid.");
+                 setIsLoading(false);
+                 return;
+             }
         }
         
         const model = pb.authStore.model;
@@ -366,22 +371,10 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 avatar: model.avatar ? pb.files.getUrl(model, model.avatar) : undefined
             });
             
-            await fetchUsers();
-
-             const roomsList = await pb.collection('rooms').getFullList<Room>();
-             if (roomsList.length === 0) {
-                 try {
-                    const newRoom = await pb.collection('rooms').create({ name: 'General', topic: 'The lobby', isMuted: false }) as unknown as Room;
-                    setRooms([newRoom]);
-                    setCurrentRoom(newRoom);
-                 } catch {}
-             } else {
-                 setRooms(roomsList);
-                 if(!currentRoom) setCurrentRoom(roomsList[0]);
-             }
+            // Note: Users and Room data will be fetched by the useEffects now that currentUser is set
         }
     } catch (e: any) {
-        console.error("Login error:", e);
+        console.error("Login process error:", e);
     } finally {
         setIsLoading(false);
     }
