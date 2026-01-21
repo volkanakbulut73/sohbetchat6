@@ -9,7 +9,7 @@ import UserList from './components/UserList';
 import ChatInput from './components/ChatInput';
 import MessageList from './components/MessageList';
 import PrivateChatWindow from './components/PrivateChatWindow';
-import { LogOut, Hash, Plus, Command, Bot, Users, Lock, Unlock, Loader2, Key } from 'lucide-react';
+import { LogOut, Hash, Plus, Command, Bot, Users, Lock, Unlock, Loader2, Key, Mail, User as UserIcon, LockKeyhole } from 'lucide-react';
 
 export interface CuteMIRCProps {
     pocketbaseUrl: string;
@@ -33,8 +33,13 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [showMobileUserList, setShowMobileUserList] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   
-  // Login & API Key State
-  const [usernameInput, setUsernameInput] = useState('');
+  // Login & Register State
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState(''); // Used for registration
+  
+  // API Key State
   const [hasApiKey, setHasApiKey] = useState(false);
   const [showKeySelector, setShowKeySelector] = useState(false);
   
@@ -319,35 +324,53 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   // --- Handlers ---
 
-  const handleLogin = async () => {
-    if (!usernameInput || isLoading) return;
+  const handleAuth = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!email || !password || (authMode === 'register' && !username)) return;
+    
     setIsLoading(true);
-    const password = 'password123';
 
     try {
-        // Try Login FIRST
-        try {
-             await pb.collection('users').authWithPassword(usernameInput, password);
-        } catch (loginErr) {
-             // If Login Fails, Try Create
-             try {
+        if (authMode === 'register') {
+            // Register Flow
+            try {
+                // Create user
                 await pb.collection('users').create({
-                    username: usernameInput,
+                    username: username,
+                    email: email,
                     password: password,
                     passwordConfirm: password,
+                    emailVisibility: true,
                     role: 'user',
                     isOnline: true,
                     banned: false
                 });
-                // Then Login Again
-                await pb.collection('users').authWithPassword(usernameInput, password);
-             } catch (createErr) {
-                 alert("Login failed. Username might be taken or invalid.");
-                 setIsLoading(false);
-                 return;
-             }
+                
+                // If create successful, immediately login
+                await pb.collection('users').authWithPassword(email, password);
+            } catch (err: any) {
+                console.error("Registration failed:", err);
+                let errorMsg = "Registration failed. ";
+                if (err.status === 400) errorMsg += "Username or Email might be taken.";
+                else if (err.status === 403) errorMsg += "Public registration is disabled in PocketBase settings.";
+                else errorMsg += err.message;
+                alert(errorMsg);
+                setIsLoading(false);
+                return;
+            }
+        } else {
+            // Login Flow
+            try {
+                await pb.collection('users').authWithPassword(email, password);
+            } catch (err: any) {
+                console.error("Login failed:", err);
+                alert("Login failed. Check your email/username and password.");
+                setIsLoading(false);
+                return;
+            }
         }
-        
+
+        // Post-Login Logic (Same for both paths)
         const model = pb.authStore.model;
         if (model) {
             if (model.banned) {
@@ -370,11 +393,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 updated: model.updated,
                 avatar: model.avatar ? pb.files.getUrl(model, model.avatar) : undefined
             });
-            
-            // Note: Users and Room data will be fetched by the useEffects now that currentUser is set
+            // Reset forms
+            setPassword('');
         }
     } catch (e: any) {
-        console.error("Login process error:", e);
+        console.error("Auth process error:", e);
+        alert("Authentication error.");
     } finally {
         setIsLoading(false);
     }
@@ -547,14 +571,16 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       <div className={`flex flex-col h-[100dvh] w-full bg-mirc-darker text-gray-200 overflow-hidden ${className || ''}`}>
         {!currentUser ? (
           <div className="flex items-center justify-center h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
-              <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-mirc-pink/30 w-96 text-center">
+              <div className="bg-slate-800 p-6 md:p-8 rounded-2xl shadow-2xl border border-mirc-pink/30 w-[90%] md:w-96 text-center animate-in fade-in zoom-in duration-300">
                   <div className="mb-6 flex justify-center">
                       <div className="bg-mirc-pink p-4 rounded-full shadow-[0_0_20px_#f472b6]">
                           <Bot size={48} className="text-white" />
                       </div>
                   </div>
                   <h1 className="text-2xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-mirc-pink to-mirc-purple">WorkigomChat AI</h1>
-                  <p className="text-sm text-gray-400 mb-6 font-mono">Enter the retro-future chat.</p>
+                  <p className="text-sm text-gray-400 mb-6 font-mono">
+                      {authMode === 'login' ? 'Login to continue' : 'Join the retro future'}
+                  </p>
                   
                   {!hasApiKey && (
                       <div className="mb-6 p-3 bg-red-900/30 border border-red-500/50 rounded text-xs text-red-200">
@@ -572,24 +598,79 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                       </div>
                   )}
 
-                  <div className="relative">
-                      <input 
-                          type="text" 
-                          placeholder="Choose a Nickname"
-                          className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg mb-4 text-white focus:border-mirc-pink outline-none transition-colors font-mono"
-                          value={usernameInput}
-                          onChange={(e) => setUsernameInput(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                  <form onSubmit={handleAuth} className="space-y-4">
+                      {/* Register: Username Field */}
+                      {authMode === 'register' && (
+                          <div className="relative group">
+                             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 group-focus-within:text-mirc-cyan transition-colors">
+                                  <UserIcon size={18} />
+                             </div>
+                             <input 
+                                  type="text" 
+                                  placeholder="Username (Nick)"
+                                  className="w-full pl-10 p-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:border-mirc-pink outline-none transition-colors font-mono"
+                                  value={username}
+                                  onChange={(e) => setUsername(e.target.value)}
+                                  disabled={isLoading}
+                                  required
+                              />
+                          </div>
+                      )}
+
+                      {/* Login/Register: Email Field */}
+                      <div className="relative group">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 group-focus-within:text-mirc-cyan transition-colors">
+                              <Mail size={18} />
+                          </div>
+                          <input 
+                              type="text" 
+                              placeholder={authMode === 'login' ? "Email or Username" : "Email Address"}
+                              className="w-full pl-10 p-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:border-mirc-pink outline-none transition-colors font-mono"
+                              value={email}
+                              onChange={(e) => setEmail(e.target.value)}
+                              disabled={isLoading}
+                              required
+                          />
+                      </div>
+
+                      {/* Login/Register: Password Field */}
+                      <div className="relative group">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 group-focus-within:text-mirc-cyan transition-colors">
+                              <LockKeyhole size={18} />
+                          </div>
+                          <input 
+                              type="password" 
+                              placeholder="Password"
+                              className="w-full pl-10 p-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:border-mirc-pink outline-none transition-colors font-mono"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+                              disabled={isLoading}
+                              required
+                              minLength={5}
+                          />
+                      </div>
+
+                      <button 
+                          type="submit"
                           disabled={isLoading}
-                      />
+                          className="w-full bg-gradient-to-r from-mirc-pink to-purple-600 text-white font-bold py-3 rounded-lg hover:shadow-[0_0_15px_rgba(244,114,182,0.4)] hover:scale-[1.02] transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                          {isLoading ? <Loader2 className="animate-spin" size={20} /> : (authMode === 'login' ? "Connect" : "Register")}
+                      </button>
+                  </form>
+                  
+                  <div className="mt-4 text-xs text-gray-400">
+                      {authMode === 'login' ? (
+                          <p>
+                              New here? <button onClick={() => setAuthMode('register')} className="text-mirc-cyan hover:underline font-bold">Create Account</button>
+                          </p>
+                      ) : (
+                          <p>
+                              Already have an account? <button onClick={() => setAuthMode('login')} className="text-mirc-cyan hover:underline font-bold">Login</button>
+                          </p>
+                      )}
                   </div>
-                  <button 
-                      onClick={handleLogin}
-                      disabled={isLoading}
-                      className="w-full bg-gradient-to-r from-mirc-pink to-purple-600 text-white font-bold py-3 rounded-lg hover:shadow-lg hover:scale-[1.02] transition-transform flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                      {isLoading ? <Loader2 className="animate-spin" size={20} /> : "Connect"}
-                  </button>
               </div>
           </div>
         ) : (
