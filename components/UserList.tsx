@@ -51,19 +51,21 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
-  // Filter: Show ALL users that are fetched.
-  // Note: If you don't see users, check PocketBase API Rules for "List/Search".
-  const visibleUsers = users;
+  // Pre-process users to ensure current user is ALWAYS visually online
+  const processedUsers = users.map(u => ({
+      ...u,
+      isOnline: u.id === currentUserId ? true : u.isOnline
+  }));
 
   // Sort: Admin > Op > Bot > Online > Offline > Name
-  const sortedUsers = [...visibleUsers].sort((a, b) => {
+  const sortedUsers = [...processedUsers].sort((a, b) => {
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
       if (roles[a.role] !== roles[b.role]) return roles[a.role] - roles[b.role];
       if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
       return a.username.localeCompare(b.username);
   });
 
-  const onlineCount = users.filter(u => u.isOnline || u.role === UserRole.BOT).length;
+  const onlineCount = sortedUsers.filter(u => u.isOnline || u.role === UserRole.BOT).length;
   const canKick = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.OPERATOR;
   const canBan = currentUserRole === UserRole.ADMIN;
   const canOp = currentUserRole === UserRole.ADMIN;
@@ -109,6 +111,7 @@ const UserList: React.FC<UserListProps> = ({
                 <div className="flex flex-col overflow-hidden">
                     <span className={`text-xs md:text-sm truncate font-medium ${getRoleColor(user)}`}>
                         {user.username}
+                        {user.id === currentUserId && <span className="ml-1 text-[9px] text-gray-500 font-normal">(You)</span>}
                     </span>
                     {!user.isOnline && user.role !== UserRole.BOT && (
                         <span className="text-[9px] text-gray-500 uppercase font-bold leading-none">Away</span>
