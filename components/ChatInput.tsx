@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Send, Image as ImageIcon, Mic, Lock, Palette, X } from 'lucide-react';
+import { Send, Image as ImageIcon, Lock, Palette, X } from 'lucide-react';
 
 interface ChatInputProps {
   onSendMessage: (text: string, file?: File) => void;
@@ -79,7 +79,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
                 type="file" 
                 ref={fileInputRef} 
                 className="hidden" 
-                accept="image/*,audio/*"
+                accept="image/*"
                 onChange={handleFileSelect}
             />
           </>
@@ -139,15 +139,6 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
           `}
           rows={1}
         />
-        
-        {allowAttachments && !disabled && (
-          <button 
-              className="p-1.5 md:p-2 text-gray-400 hover:text-mirc-pink transition-colors"
-              title="Voice Message (Mock)"
-          >
-            <Mic size={18} className="md:w-5 md:h-5" />
-          </button>
-        )}
 
         {!disabled && (
             <button

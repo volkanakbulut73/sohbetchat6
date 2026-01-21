@@ -1,8 +1,5 @@
 {
   "name": "WorkigomChat AI",
   "description": "A modern, cute, MIRC-style chat application with Gemini AI integration and PocketBase backend.",
-  "requestFramePermissions": [
-    "microphone",
-    "camera"
-  ]
+  "requestFramePermissions": []
 }

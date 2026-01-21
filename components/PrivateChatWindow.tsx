@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, PrivateMessage } from '../types';
-import { X, Minus, Send, Image as ImageIcon, Mic } from 'lucide-react';
+import { X, Minus, Send, Image as ImageIcon } from 'lucide-react';
 
 interface PrivateChatWindowProps {
   recipient: User;
@@ -104,10 +104,9 @@ const PrivateChatWindow: React.FC<PrivateChatWindowProps> = ({
                         type="file" 
                         ref={fileInputRef} 
                         className="hidden" 
-                        accept="image/*,audio/*"
+                        accept="image/*"
                         onChange={handleFileSelect}
                     />
-                    <button className="text-gray-400 hover:text-white p-1"><Mic size={16} /></button>
                 </div>
                 <div className="flex gap-2 mt-1">
                     <input 
