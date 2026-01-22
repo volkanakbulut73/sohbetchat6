@@ -32,6 +32,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [usersMap, setUsersMap] = useState<Map<string, User>>(new Map());
   const [showMobileUserList, setShowMobileUserList] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [permissionError, setPermissionError] = useState(false); // Track DB permission issues
   
   // Login & Register State
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -130,7 +131,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         });
     } catch(e: any) { 
         console.error("Failed to fetch users. Check API Rules!", e);
-        // Do not fail silently, keep empty list so we can show warning
     }
 
     const processedUsers = fetchedUsers.map(u => {
@@ -168,7 +168,15 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   useEffect(() => {
     if (!currentUser) return;
     const heartbeat = async () => {
-        try { await pb.collection('users').update(currentUser.id, { isOnline: true }); } catch (e) {}
+        try { 
+            await pb.collection('users').update(currentUser.id, { isOnline: true }); 
+            setPermissionError(false);
+        } catch (e: any) {
+            if (e.status === 403 || e.status === 404) {
+                setPermissionError(true);
+                console.error("Heartbeat failed: Update permission denied for 'users' collection.", e);
+            }
+        }
     };
     heartbeat();
     const intervalId = setInterval(heartbeat, 30000); 
@@ -726,6 +734,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                       onBan={handleBanUser}
                       onToggleOp={handleToggleOp}
                       onRefresh={fetchUsers}
+                      permissionError={permissionError}
                   />
               </div>
 

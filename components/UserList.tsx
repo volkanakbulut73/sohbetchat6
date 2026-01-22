@@ -11,6 +11,7 @@ interface UserListProps {
   onBan?: (user: User) => void;
   onToggleOp?: (user: User) => void;
   onRefresh?: () => void;
+  permissionError?: boolean;
 }
 
 const UserList: React.FC<UserListProps> = ({ 
@@ -21,7 +22,8 @@ const UserList: React.FC<UserListProps> = ({
     onKick,
     onBan,
     onToggleOp,
-    onRefresh
+    onRefresh,
+    permissionError
 }) => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; user: User | null } | null>(null);
 
@@ -41,10 +43,26 @@ const UserList: React.FC<UserListProps> = ({
     }
   };
 
+  // Helper to determine if a user is effectively online based on boolean OR timestamp
+  const isUserOnline = (user: User): boolean => {
+      if (user.id === 'bot_ai') return true;
+      if (user.id === currentUserId) return true;
+      if (user.isOnline) return true;
+      
+      // Fallback: If updated within last 3 minutes, treat as online
+      // This helps if the "isOnline" update failed but another update succeeded, 
+      // or if there is a slight desync.
+      const lastActive = new Date(user.updated).getTime();
+      const now = new Date().getTime();
+      const diff = now - lastActive;
+      return diff < 3 * 60 * 1000; // 3 minutes
+  };
+
   const getRoleColor = (user: User, isMe: boolean) => {
+    const online = isUserOnline(user);
     if (user.banned) return "text-red-500 line-through decoration-2";
     if (isMe) return "text-green-400 font-semibold";
-    if (!user.isOnline && user.role !== UserRole.BOT) return "text-gray-500"; 
+    if (!online && user.role !== UserRole.BOT) return "text-gray-500"; 
     switch (user.role) {
       case UserRole.ADMIN: return "text-yellow-400 font-bold shadow-yellow-400/20";
       case UserRole.OPERATOR: return "text-blue-400 font-semibold";
@@ -54,15 +72,15 @@ const UserList: React.FC<UserListProps> = ({
   }
 
   const sortedUsers = [...users].sort((a, b) => {
-      const aOnline = a.id === currentUserId ? true : a.isOnline;
-      const bOnline = b.id === currentUserId ? true : b.isOnline;
+      const aOnline = isUserOnline(a);
+      const bOnline = isUserOnline(b);
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
       if (roles[a.role] !== roles[b.role]) return roles[a.role] - roles[b.role];
       if (aOnline !== bOnline) return aOnline ? -1 : 1;
       return a.username.localeCompare(b.username);
   });
 
-  const onlineCount = users.filter(u => u.id === currentUserId || u.isOnline || u.role === UserRole.BOT).length;
+  const onlineCount = users.filter(u => isUserOnline(u)).length;
   const canKick = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.OPERATOR;
   const canBan = currentUserRole === UserRole.ADMIN;
   const canOp = currentUserRole === UserRole.ADMIN;
@@ -84,19 +102,28 @@ const UserList: React.FC<UserListProps> = ({
       </div>
       
       <div className="flex-1 overflow-y-auto p-1 md:p-2 space-y-0.5">
-        {users.length <= 2 && (
-             <div className="p-2 text-[10px] text-gray-400 bg-red-900/20 rounded mb-2 border border-red-500/20">
-                <p className="flex items-center gap-1 mb-1 text-red-400 font-bold"><AlertTriangle size={12} /> System Warning:</p>
-                Only you are visible. This is a <b>PocketBase Permission</b> issue.<br/><br/>
+        
+        {/* Permission Error Warning */}
+        {permissionError && (
+             <div className="p-2 text-[10px] text-gray-300 bg-red-900/40 rounded mb-2 border border-red-500/50">
+                <p className="flex items-center gap-1 mb-1 text-red-400 font-bold"><AlertTriangle size={12} /> Permission Error:</p>
+                You cannot update your Online status. Other users see you as "Away".<br/><br/>
                 <b>Fix:</b> Go to PB Admin &gt; Collections &gt; <b>users</b> &gt; Settings &gt; <b>API Rules</b>.<br/>
-                Set <b>List rule</b> to <code>Empty</code> (Public) or <code>id != ""</code>.<br/>
-                <span className="text-gray-500 italic block mt-1">If it is "id = @request.auth.id", you will only see yourself.</span>
+                Set <b>Update rule</b> to <code>id = @request.auth.id</code> or empty.
+             </div>
+        )}
+
+        {/* List Visibility Warning */}
+        {users.length <= 2 && !permissionError && (
+             <div className="p-2 text-[10px] text-gray-500 bg-slate-800/50 rounded mb-2 border border-slate-700/50">
+                <p className="flex items-center gap-1 mb-1 text-orange-400"><AlertTriangle size={10} /> Tip:</p>
+                If you don't see others, check PB <b>List Rule</b>. It should be Empty (Public).
              </div>
         )}
 
         {sortedUsers.map((user) => {
             const isMe = user.id === currentUserId;
-            const isOnline = isMe ? true : user.isOnline;
+            const isOnline = isUserOnline(user);
 
             return (
               <div
