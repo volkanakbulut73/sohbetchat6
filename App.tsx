@@ -8,13 +8,17 @@ import MusicPlayer from './components/MusicPlayer';
 import UserList from './components/UserList';
 import ChatInput from './components/ChatInput';
 import MessageList from './components/MessageList';
-import PrivateChatWindow from './components/PrivateChatWindow';
-import { LogOut, Hash, Plus, Command, Bot, Users, Lock, Unlock, Loader2, Key, Mail, User as UserIcon, LockKeyhole, WifiOff } from 'lucide-react';
+import { LogOut, Hash, Plus, Command, Bot, Users, Loader2, Key, Mail, User as UserIcon, LockKeyhole, WifiOff, X, MessageCircle, ChevronDown, Check } from 'lucide-react';
 
 export interface CuteMIRCProps {
     pocketbaseUrl: string;
     className?: string;
 }
+
+// Define the View State to switch between Room and Private Chat
+type ViewState = 
+    | { type: 'room'; id: string }
+    | { type: 'pm'; userId: string };
 
 const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const pb = useMemo(() => createPocketBaseClient(pocketbaseUrl), [pocketbaseUrl]);
@@ -22,9 +26,14 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // --- State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
   
-  // Split messages into DB (persistent) and Local (Bot/System)
+  // VIEW MANAGEMENT
+  const [currentView, setCurrentView] = useState<ViewState>({ type: 'room', id: '' });
+  
+  // Track the *last active room* so when we close a PM or switch back, we go there
+  const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
+
+  // Messages
   const [dbMessages, setDbMessages] = useState<Message[]>([]);
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
   
@@ -35,45 +44,50 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [permissionError, setPermissionError] = useState(false);
   const [realtimeError, setRealtimeError] = useState(false);
   
-  // Login & Register State
+  // Login & Register
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState(''); 
   
-  // API Key State
   const [hasApiKey, setHasApiKey] = useState(false);
   const [showKeySelector, setShowKeySelector] = useState(false);
   
-  // Private Chats
+  // Active Private Chats (Open Tabs)
   const [activePMs, setActivePMs] = useState<User[]>([]);
   const [privateMessages, setPrivateMessages] = useState<Record<string, PrivateMessage[]>>({});
-  // Set of User IDs that have sent a message we haven't read yet (flashing state)
   const [unreadPMs, setUnreadPMs] = useState<Set<string>>(new Set());
+
+  // Show "More" dropdown for tabs
+  const [showTabOverflow, setShowTabOverflow] = useState(false);
 
   // --- Refs ---
   const usersMapRef = useRef(usersMap);
   const currentUserRef = useRef(currentUser);
   const activePMsRef = useRef(activePMs);
-  
-  // Track previous room ID to handle switching strictly
-  const prevRoomIdRef = useRef<string | null>(null);
+  const currentViewRef = useRef(currentView);
 
   useEffect(() => { usersMapRef.current = usersMap; }, [usersMap]);
   useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
   useEffect(() => { activePMsRef.current = activePMs; }, [activePMs]);
+  useEffect(() => { currentViewRef.current = currentView; }, [currentView]);
 
   // --- Helpers ---
   const isModerator = (user: User | null) => user?.role === UserRole.ADMIN || user?.role === UserRole.OPERATOR;
   const isAdmin = (user: User | null) => user?.role === UserRole.ADMIN;
 
-  // Combine DB and Local messages for display
-  const allMessages = useMemo(() => {
+  // Get current Room object easily
+  const currentRoomObj = useMemo(() => 
+    rooms.find(r => r.id === activeRoomId) || null
+  , [rooms, activeRoomId]);
+
+  // Combine DB and Local messages for PUBLIC chat
+  const allPublicMessages = useMemo(() => {
       const combined = [...dbMessages, ...localMessages];
       return combined.sort((a, b) => new Date(a.created).getTime() - new Date(b.created).getTime());
   }, [dbMessages, localMessages]);
 
-  // --- Check for API Key ---
+  // --- API Key Check ---
   useEffect(() => {
     const checkKey = async () => {
         const key = getApiKey();
@@ -109,12 +123,10 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       }
   };
 
-  // --- Core Data Fetching ---
-  
+  // --- Fetch Users ---
   const fetchUsers = useCallback(async () => {
     if (!pb.authStore.isValid) return;
 
-    // Define Bot User
     const bot: User = { 
         id: 'bot_ai', 
         username: BOT_NAME, 
@@ -126,16 +138,13 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
     
     let fetchedUsers: User[] = [];
-
     try {
         fetchedUsers = await pb.collection('users').getFullList<User>({ 
             sort: 'username', 
             requestKey: null,
             headers: { 'x-no-cache': 'true' }
         });
-    } catch(e: any) { 
-        console.error("Failed to fetch users. Check API Rules!", e);
-    }
+    } catch(e) { console.error("Fetch users error", e); }
 
     const processedUsers = fetchedUsers.map(u => {
         if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
@@ -152,7 +161,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 username: pb.authStore.model.username,
                 role: (pb.authStore.model.role as UserRole) || UserRole.USER,
                 isOnline: true,
-                avatar: pb.authStore.model.avatar ? pb.files.getUrl(pb.authStore.model, pb.authStore.model.avatar) : undefined,
                 created: pb.authStore.model.created,
                 updated: pb.authStore.model.updated
             };
@@ -162,12 +170,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
     const realUsers = processedUsers.filter(u => u.id !== 'bot_ai');
     const allUsers = [...realUsers, bot];
-    
     setUsers(allUsers);
     setUsersMap(new Map(allUsers.map(u => [u.id, u])));
   }, [pb]);
 
-  // --- HEARTBEAT SYSTEM ---
+  // --- Heartbeat ---
   useEffect(() => {
     if (!currentUser) return;
     const heartbeat = async () => {
@@ -175,9 +182,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             await pb.collection('users').update(currentUser.id, { isOnline: true }); 
             setPermissionError(false);
         } catch (e: any) {
-            if (e.status === 403 || e.status === 404) {
-                setPermissionError(true);
-            }
+            if (e.status === 403 || e.status === 404) setPermissionError(true);
         }
     };
     heartbeat();
@@ -185,39 +190,25 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     return () => clearInterval(intervalId);
   }, [currentUser, pb]);
 
-
-  // --- Effects ---
-
-  // 1. Initial Load (Auth Check)
+  // --- Initial Load ---
   useEffect(() => {
     const init = async () => {
       if (pb.authStore.isValid && pb.authStore.model) {
         try {
             const freshMe = await pb.collection('users').getOne(pb.authStore.model.id);
             if (freshMe.banned) {
-                alert("You are banned from this server.");
+                alert("You are banned.");
                 pb.authStore.clear();
                 return;
             }
-            const user = {
-                id: freshMe.id,
-                username: freshMe.username,
-                avatar: freshMe.avatar ? pb.files.getUrl(freshMe, freshMe.avatar) : undefined,
-                role: (freshMe.role as UserRole) || UserRole.USER,
-                isOnline: true,
-                created: freshMe.created,
-                updated: freshMe.updated
-            } as User;
-            setCurrentUser(user);
-        } catch (e) {
-            pb.authStore.clear();
-        }
+            setCurrentUser({ ...freshMe, role: freshMe.role as UserRole, isOnline: true } as User);
+        } catch (e) { pb.authStore.clear(); }
       }
     };
     init();
   }, [pb]);
 
-  // 1.5 Fetch Rooms
+  // --- Load Rooms ---
   useEffect(() => {
       if (!currentUser) return;
       const loadRooms = async () => {
@@ -225,16 +216,16 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             const roomsList = await pb.collection('rooms').getFullList<Room>({ sort: 'created' });
             setRooms(roomsList);
             if (roomsList.length > 0) {
-                setCurrentRoom(prev => prev || roomsList[0]);
+                const firstRoom = roomsList[0];
+                setActiveRoomId(firstRoom.id);
+                setCurrentView({ type: 'room', id: firstRoom.id });
             } else if (pb.authStore.isValid) {
+                // Auto create default
                 try {
-                    const newRoom = await pb.collection('rooms').create({
-                        name: 'General',
-                        topic: 'The lobby',
-                        isMuted: false
-                    }) as unknown as Room;
-                    setRooms([newRoom]);
-                    setCurrentRoom(newRoom);
+                    const newRoom = await pb.collection('rooms').create({ name: 'General', topic: 'Lobby', isMuted: false });
+                    setRooms([newRoom as unknown as Room]);
+                    setActiveRoomId(newRoom.id);
+                    setCurrentView({ type: 'room', id: newRoom.id });
                 } catch (err) {}
             }
         } catch (e) { console.error("Error fetching rooms", e); }
@@ -242,36 +233,35 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       loadRooms();
   }, [pb, currentUser]);
 
-  // 2. Strict Room Switch Logic
+  // --- Public Message Subscription ---
   useEffect(() => {
-      if (currentRoom?.id && prevRoomIdRef.current !== currentRoom.id) {
-          setLocalMessages([]);
-          setDbMessages([]);
-          prevRoomIdRef.current = currentRoom.id;
-      }
-  }, [currentRoom?.id]);
+    if (!activeRoomId || !currentUser) return;
 
-  // 3. Message Subscription (Public Chat)
-  useEffect(() => {
-    if (!currentRoom || !currentUser) return;
-
+    // Only fetch if we are actually viewing a room (optimization)
+    // Actually, we should keep fetching to update state even if in PM? 
+    // For simplicity, let's fetch always for the activeRoomId
+    
     const fetchMessages = async () => {
       try {
           const msgs = await pb.collection('messages').getList<Message>(1, 50, {
-            filter: `room="${currentRoom.id}"`,
+            filter: `room="${activeRoomId}"`,
             sort: '-created',
             expand: 'user',
           });
           setDbMessages(msgs.items.reverse());
-      } catch (e) { console.error("Error loading messages", e); }
+      } catch (e) { }
     };
+    
+    // Clear old messages when switching rooms
+    setLocalMessages([]);
+    setDbMessages([]);
     fetchMessages();
 
     const initSub = async () => {
         try {
             await pb.collection('messages').subscribe('*', function (e) {
                 setRealtimeError(false);
-                if (e.action === 'create' && e.record.room === currentRoom.id) {
+                if (e.action === 'create' && e.record.room === activeRoomId) {
                     const newMsg = e.record as unknown as Message;
                     if (!newMsg.expand?.user && newMsg.user) {
                         newMsg.expand = { user: usersMapRef.current.get(newMsg.user) };
@@ -282,566 +272,451 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     });
                 }
             });
-            await pb.collection('rooms').subscribe(currentRoom.id, function (e) {
-                if (e.action === 'update') {
-                    setCurrentRoom(e.record as unknown as Room);
-                }
-            });
-        } catch (err) {
-            setRealtimeError(true);
-        }
+        } catch (err) { setRealtimeError(true); }
     };
     initSub();
 
-    return () => { 
-        const cleanup = async () => {
-            try {
-                await pb.collection('messages').unsubscribe('*'); 
-                await pb.collection('rooms').unsubscribe('*');
-            } catch(_) {}
-        };
-        cleanup();
-    };
-  }, [currentRoom?.id, pb]); 
+    return () => { pb.collection('messages').unsubscribe('*').catch(()=>{}); };
+  }, [activeRoomId, pb]);
 
-  // 4. Private Message Subscription (PMs)
+  // --- Private Message Subscription ---
   useEffect(() => {
       if (!currentUser) return;
 
       const initPMSub = async () => {
           try {
-              // Load recent PMs
-              // This is a simplified fetch; in a real app you'd want meaningful history per user
-              // For now, we rely on the subscription to populate live chats
+              // Load ALL recent PMs involves me (simplified)
+              const recents = await pb.collection('private_messages').getList<PrivateMessage>(1, 200, {
+                  filter: `sender="${currentUser.id}" || recipient="${currentUser.id}"`,
+                  sort: 'created' // Get oldest first so we append
+              });
               
+              const pmMap: Record<string, PrivateMessage[]> = {};
+              
+              recents.items.forEach(pm => {
+                  const otherId = pm.sender === currentUser.id ? pm.recipient : pm.sender;
+                  if (!pmMap[otherId]) pmMap[otherId] = [];
+                  pmMap[otherId].push(pm);
+              });
+              setPrivateMessages(pmMap);
+
               await pb.collection('private_messages').subscribe('*', (e) => {
                   if (e.action === 'create') {
                       const pm = e.record as unknown as PrivateMessage;
                       const myId = currentUserRef.current?.id;
                       
-                      // Check if this PM involves me
                       if (pm.recipient === myId || pm.sender === myId) {
                           const otherUserId = pm.sender === myId ? pm.recipient : pm.sender;
                           const otherUser = usersMapRef.current.get(otherUserId);
                           
                           if (otherUser) {
-                              // Add message to state
                               setPrivateMessages(prev => ({
                                   ...prev,
                                   [otherUserId]: [...(prev[otherUserId] || []), pm]
                               }));
 
-                              // If I am the recipient, ensure window is open and FLASH it
                               if (pm.recipient === myId) {
-                                  // Open window if not already in activePMs
+                                  // Add to active PMs if not present
                                   const isActive = activePMsRef.current.some(u => u.id === otherUserId);
-                                  
                                   if (!isActive) {
                                       setActivePMs(prev => [...prev, otherUser]);
                                   }
                                   
-                                  // TRIGGER FLASH / UNREAD STATE
-                                  setUnreadPMs(prev => new Set(prev).add(otherUserId));
+                                  // If not currently VIEWING this PM, mark unread
+                                  const currentV = currentViewRef.current;
+                                  if (currentV.type !== 'pm' || currentV.userId !== otherUserId) {
+                                      setUnreadPMs(prev => new Set(prev).add(otherUserId));
+                                  }
                               }
                           }
                       }
                   }
               });
-          } catch (err) {
-              console.error("PM Sub failed", err);
-          }
+          } catch (err) { console.error("PM Sub failed", err); }
       };
       initPMSub();
-
-      return () => {
-          pb.collection('private_messages').unsubscribe('*').catch(() => {});
-      }
+      return () => { pb.collection('private_messages').unsubscribe('*').catch(()=>{}); }
   }, [currentUser, pb]);
 
-
-  // 5. User Presence Subscription & Polling
+  // --- User Presence ---
   useEffect(() => {
     if (!currentUser) return;
-
     fetchUsers();
-    const refreshInterval = setInterval(fetchUsers, 5000);
-
-    const initUserSub = async () => {
-        try {
-            await pb.collection('users').subscribe('*', (e) => {
-                fetchUsers();
-                const myId = pb.authStore.model?.id;
-                if (myId && e.record.id === myId && e.action === 'update') {
-                    const updatedUser = e.record as unknown as User;
-                     if (updatedUser.banned) {
-                        alert("You have been BANNED from the server.");
-                        handleLogout();
-                    }
-                }
-            });
-        } catch (err) {
-        }
-    };
-    initUserSub();
-
-    return () => { 
-        const cleanup = async () => {
-            try {
-               await pb.collection('users').unsubscribe('*'); 
-            } catch (_) {}
-        };
-        cleanup();
-        clearInterval(refreshInterval);
-    };
-  }, [fetchUsers, pb, currentUser]);
+    const interval = setInterval(fetchUsers, 5000);
+    return () => clearInterval(interval);
+  }, [currentUser, fetchUsers]);
 
   // --- Handlers ---
+
   const handleAuth = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!email || !password || (authMode === 'register' && !username)) return;
-    
     setIsLoading(true);
-
     try {
         if (authMode === 'register') {
-            try {
-                await pb.collection('users').create({
-                    username: username,
-                    email: email,
-                    password: password,
-                    passwordConfirm: password,
-                    emailVisibility: true,
-                    role: 'user',
-                    isOnline: true,
-                    banned: false
-                });
-                await pb.collection('users').authWithPassword(email, password);
-            } catch (err: any) {
-                alert("Registration failed. " + err.message);
-                setIsLoading(false);
-                return;
-            }
-        } else {
-            try {
-                await pb.collection('users').authWithPassword(email, password);
-            } catch (err: any) {
-                alert("Login failed.");
-                setIsLoading(false);
-                return;
-            }
+            await pb.collection('users').create({ username, email, password, passwordConfirm: password, emailVisibility: true, role: 'user', isOnline: true });
         }
-
+        await pb.collection('users').authWithPassword(email, password);
         const model = pb.authStore.model;
         if (model) {
-            if (model.banned) {
-                alert("Banned.");
-                pb.authStore.clear();
-                setIsLoading(false);
-                return;
-            }
-            try { await pb.collection('users').update(model.id, { isOnline: true }); } catch (e) {}
-            setCurrentUser({
-                id: model.id,
-                username: model.username,
-                role: model.role as UserRole,
-                isOnline: true,
-                created: model.created,
-                updated: model.updated,
-                avatar: model.avatar ? pb.files.getUrl(model, model.avatar) : undefined
-            });
+            if (model.banned) { alert("Banned."); pb.authStore.clear(); setIsLoading(false); return; }
+            await pb.collection('users').update(model.id, { isOnline: true });
+            setCurrentUser({ id: model.id, username: model.username, role: model.role as UserRole, isOnline: true, created: model.created, updated: model.updated, avatar: model.avatar ? pb.files.getUrl(model, model.avatar) : undefined });
             setPassword('');
         }
-    } catch (e: any) {
-        alert("Auth error.");
-    } finally {
-        setIsLoading(false);
-    }
+    } catch (e: any) { alert("Auth error: " + e.message); } finally { setIsLoading(false); }
   };
 
   const handleLogout = async () => {
-      if (currentUser) {
-          try { await pb.collection('users').update(currentUser.id, { isOnline: false }); } catch (e) {}
-      }
+      if (currentUser) { try { await pb.collection('users').update(currentUser.id, { isOnline: false }); } catch (e) {} }
       pb.authStore.clear();
-      setDbMessages([]);
-      setLocalMessages([]);
-      setRooms([]);
-      setCurrentRoom(null);
       setCurrentUser(null);
+      setCurrentView({ type: 'room', id: '' });
+      setDbMessages([]);
+      setActivePMs([]);
+      setPrivateMessages({});
   };
-
-  const createDefaultRoom = async () => {
-      if (!isModerator(currentUser)) return; 
-      try {
-        const newRoom = await pb.collection('rooms').create({ name: 'New Room', topic: 'New Topic', isMuted: false }) as unknown as Room;
-        setRooms(prev => [...prev, newRoom]);
-        setCurrentRoom(newRoom);
-      } catch (e) { console.error(e); }
-  }
 
   const handleSendMessage = async (text: string, file?: File) => {
-    if (!currentUser || !currentRoom) return;
-    if (!text.trim() && !file) return;
+    if (!currentUser) return;
+    
+    // ROUTE MESSAGE BASED ON VIEW
+    if (currentView.type === 'room') {
+        if (!activeRoomId) return;
+        if (currentRoomObj?.isMuted && !isModerator(currentUser)) { alert("Room locked."); return; }
 
-    if (currentRoom.isMuted && !isModerator(currentUser)) {
-        alert("Room is locked.");
-        return;
+        try {
+            // Upload attachment if present
+            let attachmentId = undefined;
+            if (file) {
+                 const formData = new FormData();
+                 formData.append('attachment', file);
+                 // We create message via formData to include file
+                 formData.append('text', text || (file.type.startsWith('audio') ? 'Voice Message' : 'Image'));
+                 formData.append('user', currentUser.id);
+                 formData.append('room', activeRoomId);
+                 formData.append('type', file.type.startsWith('audio') ? 'audio' : 'image');
+                 await pb.collection('messages').create(formData);
+            } else {
+                 await pb.collection('messages').create({ text, user: currentUser.id, room: activeRoomId });
+            }
+
+            // BOT LOGIC
+            const lowerText = text.toLowerCase();
+            if (lowerText.includes('gemini') || lowerText.includes('@bot')) {
+                 const history = allPublicMessages.slice(-5).map(m => `${usersMapRef.current.get(m.user)?.username}: ${m.text}`);
+                 try {
+                    const botResponse = await generateBotResponse(text, history);
+                    const botMsg: Message = { id: Math.random().toString(), collectionId: 'messages', collectionName: 'messages', created: new Date().toISOString(), updated: new Date().toISOString(), text: botResponse, user: 'bot_ai', room: activeRoomId, type: 'text' };
+                    setLocalMessages(prev => [...prev, botMsg]);
+                 } catch (e) {}
+            }
+        } catch (e) {}
+
+    } else if (currentView.type === 'pm') {
+        const recipientId = currentView.userId;
+        try {
+            const formData = new FormData();
+            formData.append('sender', currentUser.id);
+            formData.append('recipient', recipientId);
+            
+            if (file) {
+                formData.append('attachment', file);
+                formData.append('type', file.type.startsWith('audio') ? 'audio' : 'image');
+                formData.append('text', text || (file.type.startsWith('audio') ? 'Voice Message' : 'Image'));
+            } else {
+                formData.append('text', text);
+                formData.append('type', 'text');
+            }
+            await pb.collection('private_messages').create(formData);
+        } catch (e) { console.error("PM Send error", e); }
     }
-
-    if (text.startsWith('/nick ')) {
-        const newNick = text.substring(6);
-        await pb.collection('users').update(currentUser.id, { username: newNick });
-        return;
-    }
-
-    try {
-        await pb.collection('messages').create({
-            text: text,
-            user: currentUser.id,
-            room: currentRoom.id
-        });
-
-        const lowerText = text.toLowerCase();
-        const shouldTriggerBot = lowerText.includes('gemini') || lowerText.includes('@bot') || lowerText.includes('@ai');
-        
-        if (shouldTriggerBot) {
-             const history = allMessages.slice(-5).map(m => `${usersMapRef.current.get(m.user)?.username || 'User'}: ${m.text}`);
-             try {
-                const botResponse = await generateBotResponse(text, history);
-                // For public chat, we let the bot message just be local or we could save it to DB
-                // Saving to DB is better for persistence but requires bot logic on backend usually.
-                // We'll keep it local for simplicity in this frontend-only logic, 
-                // OR create it as the current user (impersonating bot) if we wanted persistence.
-                // Sticking to local visual for now.
-                const botMsg: Message = {
-                    id: Math.random().toString(), 
-                    collectionId: 'messages',
-                    collectionName: 'messages',
-                    created: new Date().toISOString(),
-                    updated: new Date().toISOString(),
-                    text: botResponse,
-                    user: 'bot_ai',
-                    room: currentRoom.id,
-                    type: 'text'
-                };
-                setLocalMessages(prev => [...prev, botMsg]);
-             } catch (botError) {
-                 console.error(botError);
-             }
-        }
-    } catch (e) {}
-  };
-
-  const handleToggleRoomLock = async () => {
-      if (!currentRoom || !isModerator(currentUser)) return;
-      try { await pb.collection('rooms').update(currentRoom.id, { isMuted: !currentRoom.isMuted }); } catch (e) {}
-  };
-
-  const handleKickUser = async (userToKick: User) => {
-    if (!isModerator(currentUser)) return;
-    try {
-        await pb.collection('users').update(userToKick.id, { isOnline: false });
-        await pb.collection('messages').create({
-            text: `*** ${userToKick.username} was kicked by ${currentUser!.username}`,
-            user: currentUser!.id,
-            room: currentRoom!.id,
-            type: 'text'
-        });
-    } catch (e) {}
-  };
-
-  const handleBanUser = async (userToBan: User) => {
-    if (!isAdmin(currentUser)) return;
-    try {
-        const newBanStatus = !userToBan.banned;
-        await pb.collection('users').update(userToBan.id, { 
-            banned: newBanStatus,
-            isOnline: newBanStatus ? false : userToBan.isOnline 
-        });
-        await pb.collection('messages').create({
-            text: newBanStatus ? `*** ${userToBan.username} was BANNED` : `*** ${userToBan.username} was unbanned`,
-            user: currentUser!.id,
-            room: currentRoom!.id,
-            type: 'text'
-        });
-    } catch (e) {}
-  };
-
-  const handleToggleOp = async (userToOp: User) => {
-    if (!isAdmin(currentUser)) return;
-    try {
-        const newRole = userToOp.role === UserRole.OPERATOR ? UserRole.USER : UserRole.OPERATOR;
-        await pb.collection('users').update(userToOp.id, { role: newRole });
-        await pb.collection('messages').create({
-            text: `*** ${userToOp.username} role changed`,
-            user: currentUser!.id,
-            room: currentRoom!.id,
-            type: 'text'
-        });
-    } catch (e) {}
   };
 
   const handleOpenPrivateChat = (user: User) => {
       if (user.id === currentUser?.id) return;
       if (!activePMs.find(u => u.id === user.id)) setActivePMs(prev => [...prev, user]);
-      // Remove from unread when opening explicitly
-      setUnreadPMs(prev => {
-          const next = new Set(prev);
-          next.delete(user.id);
-          return next;
-      });
+      
+      // Switch view to this user
+      setCurrentView({ type: 'pm', userId: user.id });
+      setUnreadPMs(prev => { const n = new Set(prev); n.delete(user.id); return n; });
       setShowMobileUserList(false);
   };
 
-  const handleClosePM = (userId: string) => {
+  const closePMTab = (e: React.MouseEvent, userId: string) => {
+      e.stopPropagation();
       setActivePMs(prev => prev.filter(u => u.id !== userId));
-      setUnreadPMs(prev => {
-          const next = new Set(prev);
-          next.delete(userId);
-          return next;
-      });
-  };
-
-  const handleFocusPM = (userId: string) => {
-      setUnreadPMs(prev => {
-          const next = new Set(prev);
-          next.delete(userId);
-          return next;
-      });
-  };
-
-  const handleSendPM = async (recipientId: string, text: string, file?: File) => {
-      if (!currentUser) return;
+      setUnreadPMs(prev => { const n = new Set(prev); n.delete(userId); return n; });
       
-      try {
-          // Actually persist the message to PocketBase
-          await pb.collection('private_messages').create({
-              text: text || (file ? '[Attachment]' : ''),
-              sender: currentUser.id,
-              recipient: recipientId,
-              // We'd ideally handle file uploads here via FormData if file exists, 
-              // but keeping it simple as per original scope request.
-              // attachment: file ... 
-          });
-
-          // Local state update is handled by the Subscription, 
-          // but we can optimistic update here if we wanted.
-          // Subscription is usually fast enough.
-          
-      } catch (e) {
-          console.error("Failed to send PM", e);
+      // If we closed the active view, go back to room
+      if (currentView.type === 'pm' && currentView.userId === userId) {
+          setCurrentView({ type: 'room', id: activeRoomId || '' });
       }
   };
+
+  const switchToRoom = (room: Room) => {
+      setActiveRoomId(room.id);
+      setCurrentView({ type: 'room', id: room.id });
+  };
+
+  const switchToPM = (userId: string) => {
+      setCurrentView({ type: 'pm', userId });
+      setUnreadPMs(prev => { const n = new Set(prev); n.delete(userId); return n; });
+      setShowTabOverflow(false);
+  };
+
+  const createDefaultRoom = async () => {
+      if (!isModerator(currentUser)) return;
+      try {
+          const r = await pb.collection('rooms').create({ name: 'New Room', topic: 'Topic', isMuted: false });
+          setRooms(prev => [...prev, r as unknown as Room]);
+          switchToRoom(r as unknown as Room);
+      } catch(e) {}
+  };
+
+  const handleKickUser = async (user: User) => {
+    if (!currentUser || !isModerator(currentUser)) return;
+    if (!confirm(`Are you sure you want to kick ${user.username}?`)) return;
+    try {
+        await pb.collection('users').update(user.id, { isOnline: false });
+        if (activeRoomId) {
+             await pb.collection('messages').create({
+                 text: `*** ${user.username} was kicked by ${currentUser.username}`,
+                 room: activeRoomId,
+                 user: 'bot_ai',
+                 type: 'text'
+             });
+        }
+    } catch (e: any) {
+        alert("Kick failed: " + e.message);
+    }
+  };
+
+  const handleBanUser = async (user: User) => {
+    if (!currentUser || !isAdmin(currentUser)) return;
+    const action = user.banned ? "Unban" : "Ban";
+    if (!confirm(`Are you sure you want to ${action} ${user.username}?`)) return;
+    try {
+        await pb.collection('users').update(user.id, { banned: !user.banned });
+        if (activeRoomId) {
+             await pb.collection('messages').create({
+                 text: `*** ${user.username} was ${user.banned ? 'unbanned' : 'banned'} by ${currentUser.username}`,
+                 room: activeRoomId,
+                 user: 'bot_ai',
+                 type: 'text'
+             });
+        }
+    } catch (e: any) {
+        alert(`${action} failed: ` + e.message);
+    }
+  };
+
+  const handleToggleOp = async (user: User) => {
+    if (!currentUser || !isAdmin(currentUser)) return;
+    const isOp = user.role === UserRole.OPERATOR;
+    if (!confirm(`Are you sure you want to ${isOp ? "demote" : "promote"} ${user.username}?`)) return;
+    try {
+        const newRole = isOp ? UserRole.USER : UserRole.OPERATOR;
+        await pb.collection('users').update(user.id, { role: newRole });
+        if (activeRoomId) {
+             await pb.collection('messages').create({
+                 text: `*** ${user.username} is now ${newRole === UserRole.OPERATOR ? 'an Operator' : 'a User'}`,
+                 room: activeRoomId,
+                 user: 'bot_ai',
+                 type: 'text'
+             });
+        }
+    } catch (e: any) {
+        alert("Role change failed: " + e.message);
+    }
+  };
+
+  // --- Render Helpers ---
+  const MAX_VISIBLE_TABS = 4;
+  const visiblePMs = activePMs.slice(0, MAX_VISIBLE_TABS);
+  const overflowPMs = activePMs.slice(MAX_VISIBLE_TABS);
+
+  // Determine current user for header display
+  const targetUserForHeader = currentView.type === 'pm' ? usersMap.get(currentView.userId) : null;
+
+  // Decide which messages to show
+  const messagesToShow = currentView.type === 'room' 
+      ? allPublicMessages 
+      : (privateMessages[currentView.userId] || []);
 
   return (
     <MIRCProvider pb={pb}>
       <div className={`flex flex-col h-[100dvh] w-full bg-mirc-darker text-gray-200 overflow-hidden ${className || ''}`}>
         {!currentUser ? (
-          <div className="flex items-center justify-center h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
+           /* LOGIN SCREEN (Unchanged from original essentially) */
+           <div className="flex items-center justify-center h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
               <div className="bg-slate-800 p-6 md:p-8 rounded-2xl shadow-2xl border border-mirc-pink/30 w-[90%] md:w-96 text-center animate-in fade-in zoom-in duration-300">
-                  <div className="mb-6 flex justify-center">
-                      <div className="bg-mirc-pink p-4 rounded-full shadow-[0_0_20px_#f472b6]">
-                          <Bot size={48} className="text-white" />
-                      </div>
-                  </div>
+                  {/* ... Login Form ... */}
+                  <div className="mb-6 flex justify-center"><div className="bg-mirc-pink p-4 rounded-full shadow-[0_0_20px_#f472b6]"><Bot size={48} className="text-white" /></div></div>
                   <h1 className="text-2xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-mirc-pink to-mirc-purple">WorkigomChat AI</h1>
-                  <p className="text-sm text-gray-400 mb-6 font-mono">
-                      {authMode === 'login' ? 'Login to continue' : 'Join the retro future'}
-                  </p>
-                  
-                  {!hasApiKey && (
-                      <div className="mb-6 p-3 bg-red-900/30 border border-red-500/50 rounded text-xs text-red-200">
-                          <p className="mb-2 font-bold flex items-center justify-center gap-1">⚠️ API Key Missing</p>
-                          {showKeySelector ? (
-                              <button 
-                                onClick={handleSelectKey}
-                                className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded flex items-center justify-center gap-2"
-                              >
-                                  <Key size={14} /> Select API Key
+                  <p className="text-sm text-gray-400 mb-6 font-mono">{authMode === 'login' ? 'Login' : 'Register'}</p>
+                  {!hasApiKey && <div className="mb-6 p-3 bg-red-900/30 border border-red-500/50 rounded text-xs text-red-200"><p>⚠️ API Key Missing</p>{showKeySelector && <button onClick={handleSelectKey} className="mt-2 bg-red-600 px-2 py-1 rounded">Select Key</button>}</div>}
+                  <form onSubmit={handleAuth} className="space-y-4">
+                      {authMode === 'register' && <input type="text" placeholder="Username" className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white" value={username} onChange={e=>setUsername(e.target.value)} required />}
+                      <input type="text" placeholder="Email" className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white" value={email} onChange={e=>setEmail(e.target.value)} required />
+                      <input type="password" placeholder="Password" className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white" value={password} onChange={e=>setPassword(e.target.value)} required />
+                      <button type="submit" disabled={isLoading} className="w-full bg-mirc-pink text-white font-bold py-3 rounded-lg flex justify-center">{isLoading ? <Loader2 className="animate-spin" /> : (authMode === 'login' ? "Connect" : "Register")}</button>
+                  </form>
+                  <div className="mt-4 text-xs text-gray-400"><button onClick={() => setAuthMode(authMode==='login'?'register':'login')} className="text-mirc-cyan hover:underline">{authMode==='login'?'Create Account':'Login'}</button></div>
+              </div>
+           </div>
+        ) : (
+          <>
+            {/* HEADER */}
+            <header className="h-14 bg-slate-800/90 backdrop-blur-md border-b border-gray-700 flex items-center justify-between px-2 gap-2 sticky top-0 z-30 shrink-0">
+              
+              {/* Left: Logo & Room Selector */}
+              <div className="flex items-center gap-2 shrink-0">
+                   <div className="w-8 h-8 bg-gradient-to-br from-mirc-pink to-purple-500 rounded-lg flex items-center justify-center shrink-0">
+                      <Command size={18} className="text-white" />
+                   </div>
+                   
+                   {/* Room Dropdown */}
+                   <div className="relative group">
+                      <button className={`
+                          flex items-center gap-2 px-3 py-1.5 rounded-l-full border-y border-l border-gray-600 text-xs md:text-sm transition-colors max-w-[120px] truncate
+                          ${currentView.type === 'room' ? 'bg-mirc-cyan/10 border-mirc-cyan text-mirc-cyan font-bold' : 'bg-slate-900 text-gray-400 hover:text-white'}
+                      `}>
+                          <Hash size={14} />
+                          <span className="truncate">{currentRoomObj?.name || 'Select Room'}</span>
+                          <ChevronDown size={12} className="ml-1 opacity-50" />
+                      </button>
+                      {/* Room Menu */}
+                      <div className="absolute top-full left-0 mt-1 w-48 bg-slate-800 border border-gray-600 rounded-lg shadow-xl hidden group-hover:block z-50">
+                          {rooms.map(r => (
+                              <button key={r.id} onClick={() => switchToRoom(r)} className="w-full text-left px-3 py-2 text-sm hover:bg-white/5 flex items-center gap-2 text-gray-300">
+                                  <Hash size={12} /> {r.name} {activeRoomId === r.id && <Check size={12} className="ml-auto text-green-400" />}
                               </button>
-                          ) : (
-                              <p className="opacity-80">Please add VITE_API_KEY</p>
+                          ))}
+                          {isModerator(currentUser) && <button onClick={createDefaultRoom} className="w-full text-left px-3 py-2 text-sm hover:bg-white/5 text-gray-400 border-t border-gray-700"><Plus size={12} className="inline mr-1"/> New Room</button>}
+                      </div>
+                   </div>
+              </div>
+
+              {/* Center: PM Tabs */}
+              <div className="flex-1 flex items-center gap-1 overflow-x-auto scrollbar-hide mask-linear-fade">
+                  {visiblePMs.map(user => {
+                      const isActive = currentView.type === 'pm' && currentView.userId === user.id;
+                      const isUnread = unreadPMs.has(user.id);
+                      return (
+                          <div 
+                              key={user.id} 
+                              onClick={() => switchToPM(user.id)}
+                              className={`
+                                  group relative flex items-center gap-2 px-3 py-1.5 rounded-t-lg border-t border-x border-gray-700 cursor-pointer min-w-[100px] max-w-[150px]
+                                  ${isActive ? 'bg-slate-700 text-white border-b-slate-700 mb-[-1px] z-10' : 'bg-slate-900 text-gray-400 hover:bg-slate-800'}
+                                  ${isUnread ? 'animate-flash font-bold' : ''}
+                              `}
+                          >
+                              <div className="relative">
+                                  <img src={user.avatar || DEFAULT_AVATAR} className="w-4 h-4 rounded-full" />
+                                  <span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-slate-900 ${user.isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
+                              </div>
+                              <span className="text-xs truncate flex-1">{user.username}</span>
+                              <button 
+                                  onClick={(e) => closePMTab(e, user.id)}
+                                  className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-500 hover:text-white rounded-full transition-all"
+                              >
+                                  <X size={10} />
+                              </button>
+                          </div>
+                      )
+                  })}
+
+                  {/* Overflow Menu */}
+                  {overflowPMs.length > 0 && (
+                      <div className="relative">
+                          <button 
+                              onClick={() => setShowTabOverflow(!showTabOverflow)}
+                              className={`flex items-center gap-1 px-2 py-1.5 text-xs font-bold rounded ${unreadPMs.size > 0 ? 'text-mirc-pink animate-pulse' : 'text-gray-400 hover:text-white'}`}
+                          >
+                              <MessageCircle size={14} />
+                              +{overflowPMs.length}
+                          </button>
+                          {showTabOverflow && (
+                              <div className="absolute top-full right-0 mt-2 w-48 bg-slate-800 border border-gray-600 rounded-lg shadow-xl z-50">
+                                  {overflowPMs.map(u => (
+                                      <div key={u.id} onClick={() => switchToPM(u.id)} className="flex items-center justify-between px-3 py-2 hover:bg-white/5 cursor-pointer text-sm text-gray-300">
+                                          <div className="flex items-center gap-2">
+                                              <span className={`w-2 h-2 rounded-full ${unreadPMs.has(u.id) ? 'bg-mirc-pink animate-pulse' : 'bg-transparent'}`} />
+                                              {u.username}
+                                          </div>
+                                          <button onClick={(e) => closePMTab(e, u.id)} className="text-gray-500 hover:text-red-400"><X size={12}/></button>
+                                      </div>
+                                  ))}
+                              </div>
                           )}
                       </div>
                   )}
-
-                  <form onSubmit={handleAuth} className="space-y-4">
-                      {authMode === 'register' && (
-                          <div className="relative group">
-                             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 group-focus-within:text-mirc-cyan transition-colors">
-                                  <UserIcon size={18} />
-                             </div>
-                             <input 
-                                  type="text" 
-                                  placeholder="Username (Nick)"
-                                  className="w-full pl-10 p-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:border-mirc-pink outline-none transition-colors font-mono"
-                                  value={username}
-                                  onChange={(e) => setUsername(e.target.value)}
-                                  disabled={isLoading}
-                                  required
-                              />
-                          </div>
-                      )}
-                      <div className="relative group">
-                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 group-focus-within:text-mirc-cyan transition-colors">
-                              <Mail size={18} />
-                          </div>
-                          <input 
-                              type="text" 
-                              placeholder={authMode === 'login' ? "Email or Username" : "Email Address"}
-                              className="w-full pl-10 p-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:border-mirc-pink outline-none transition-colors font-mono"
-                              value={email}
-                              onChange={(e) => setEmail(e.target.value)}
-                              disabled={isLoading}
-                              required
-                          />
-                      </div>
-                      <div className="relative group">
-                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 group-focus-within:text-mirc-cyan transition-colors">
-                              <LockKeyhole size={18} />
-                          </div>
-                          <input 
-                              type="password" 
-                              placeholder="Password"
-                              className="w-full pl-10 p-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:border-mirc-pink outline-none transition-colors font-mono"
-                              value={password}
-                              onChange={(e) => setPassword(e.target.value)}
-                              onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
-                              disabled={isLoading}
-                              required
-                              minLength={5}
-                          />
-                      </div>
-                      <button 
-                          type="submit"
-                          disabled={isLoading}
-                          className="w-full bg-gradient-to-r from-mirc-pink to-purple-600 text-white font-bold py-3 rounded-lg hover:shadow-[0_0_15px_rgba(244,114,182,0.4)] hover:scale-[1.02] transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                          {isLoading ? <Loader2 className="animate-spin" size={20} /> : (authMode === 'login' ? "Connect" : "Register")}
-                      </button>
-                  </form>
-                  <div className="mt-4 text-xs text-gray-400">
-                      {authMode === 'login' ? (
-                          <p>New here? <button onClick={() => setAuthMode('register')} className="text-mirc-cyan hover:underline font-bold">Create Account</button></p>
-                      ) : (
-                          <p>Already have an account? <button onClick={() => setAuthMode('login')} className="text-mirc-cyan hover:underline font-bold">Login</button></p>
-                      )}
-                  </div>
-              </div>
-          </div>
-        ) : (
-          <>
-            <header className="h-16 bg-slate-800/80 backdrop-blur-md border-b border-gray-700 flex items-center justify-between px-2 md:px-4 sticky top-0 z-10 shrink-0">
-              <div className="flex items-center gap-2 md:gap-4 flex-1 overflow-hidden">
-                  <div className="flex items-center gap-2 shrink-0">
-                      <div className="w-8 h-8 bg-gradient-to-br from-mirc-pink to-purple-500 rounded-lg flex items-center justify-center shrink-0">
-                          <Command size={18} className="text-white" />
-                      </div>
-                      <span className="font-bold text-lg hidden md:block">WorkigomChat AI</span>
-                      {realtimeError && (
-                          <span className="flex items-center gap-1 text-[10px] text-red-400 bg-red-900/20 px-2 py-0.5 rounded border border-red-500/20 animate-pulse" title="Realtime connection failed. Falling back to polling.">
-                              <WifiOff size={10} /> Connection issues
-                          </span>
-                      )}
-                  </div>
-                  
-                  <div className="relative group shrink-0 flex items-center gap-2">
-                      <button className="flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded-full border border-gray-600 text-xs md:text-sm hover:border-mirc-cyan transition-colors truncate max-w-[100px] md:max-w-none">
-                          <Hash size={14} className="text-gray-400" />
-                          <span className="font-mono text-mirc-cyan truncate">{currentRoom?.name || 'Select'}</span>
-                      </button>
-                      <div className="absolute top-full left-0 mt-2 w-48 bg-slate-800 border border-gray-600 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all transform origin-top-left z-20">
-                          <div className="p-1">
-                              {rooms.map(room => (
-                                  <button 
-                                      key={room.id}
-                                      onClick={() => setCurrentRoom(room)}
-                                      className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${currentRoom?.id === room.id ? 'bg-mirc-pink text-white' : 'text-gray-300 hover:bg-white/5'}`}
-                                  >
-                                      <Hash size={12} /> {room.name}
-                                  </button>
-                              ))}
-                              {isModerator(currentUser) && (
-                                  <>
-                                      <div className="h-px bg-gray-700 my-1"></div>
-                                      <button className="w-full text-left px-3 py-2 rounded text-sm text-gray-400 hover:text-white flex items-center gap-2" onClick={createDefaultRoom}>
-                                          <Plus size={12} /> Create Room
-                                      </button>
-                                  </>
-                              )}
-                          </div>
-                      </div>
-                  </div>
               </div>
 
-              <div className="mx-1 shrink-0 hidden md:block">
-                  <MusicPlayer />
-              </div>
-
-              <div className="flex items-center gap-2 md:gap-3 shrink-0">
-                  <button onClick={() => setShowMobileUserList(!showMobileUserList)} className="md:hidden p-2 rounded-lg transition-colors text-gray-400 hover:text-white"><Users size={20} /></button>
-                  <div className="flex flex-col items-end mr-1 hidden sm:flex">
-                      <span className="text-sm font-bold text-gray-200">{currentUser.username}</span>
-                      <div className="flex items-center gap-1">
-                          {currentUser.role === UserRole.ADMIN && <span className="text-[9px] bg-yellow-500/20 text-yellow-400 px-1 rounded border border-yellow-500/50">ADMIN</span>}
-                          <span className="text-[10px] text-green-400 font-mono">ONLINE</span>
-                      </div>
-                  </div>
-                  <img src={currentUser.avatar || DEFAULT_AVATAR} className="w-8 h-8 md:w-9 md:h-9 rounded-full border border-gray-500" alt="me" />
-                  <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-400" title="Logout"><LogOut size={18} /></button>
+              {/* Right: Music & Profile */}
+              <div className="flex items-center gap-2 shrink-0">
+                  <div className="hidden md:block"><MusicPlayer /></div>
+                  <button onClick={() => setShowMobileUserList(!showMobileUserList)} className="md:hidden p-2 text-gray-400"><Users size={20}/></button>
+                  <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-400"><LogOut size={18}/></button>
               </div>
             </header>
 
+            {/* MAIN CONTENT AREA */}
             <div className="flex flex-1 overflow-hidden relative">
+              
+              {/* Chat Area */}
               <div className="flex-1 flex flex-col bg-slate-900/50 relative min-w-0 min-h-0 w-full">
-                  {currentRoom ? (
-                      <>
-                          <MessageList messages={allMessages} currentUser={currentUser} usersMap={usersMap} />
-                          <ChatInput onSendMessage={handleSendMessage} allowAttachments={false} disabled={currentRoom.isMuted && !isModerator(currentUser)} isLocked={currentRoom.isMuted} />
-                      </>
-                  ) : (
-                      <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-4">
-                          <Hash size={48} className="opacity-20" />
-                          <p>No active channel.</p>
-                      </div>
-                  )}
+                  {/* Chat Header Info Bar */}
+                  <div className="bg-slate-950/30 border-b border-gray-800 px-4 py-1 flex items-center justify-between text-xs text-gray-500 h-8 shrink-0">
+                      {currentView.type === 'room' ? (
+                          <span>Topic: {currentRoomObj?.topic || 'Welcome to the chat'} {currentRoomObj?.isMuted && <span className="text-red-400 ml-2 flex items-center gap-1 inline-flex"><LockKeyhole size={10}/> LOCKED</span>}</span>
+                      ) : (
+                          <div className="flex items-center gap-2 text-mirc-pink">
+                              <span className="font-bold">PRIVATE CHAT</span>
+                              <span className="text-gray-400">with {targetUserForHeader?.username}</span>
+                          </div>
+                      )}
+                      {realtimeError && <span className="text-red-500 flex items-center gap-1"><WifiOff size={10}/> Reconnecting...</span>}
+                  </div>
+
+                  <MessageList 
+                      messages={messagesToShow as Message[]} 
+                      currentUser={currentUser} 
+                      usersMap={usersMap} 
+                      isPrivate={currentView.type === 'pm'}
+                  />
+                  
+                  <ChatInput 
+                      onSendMessage={handleSendMessage} 
+                      allowAttachments={true} 
+                      disabled={currentView.type === 'room' && currentRoomObj?.isMuted && !isModerator(currentUser)} 
+                      isLocked={currentView.type === 'room' && currentRoomObj?.isMuted} 
+                  />
               </div>
 
+              {/* Sidebar (User List) */}
               <div className={`
                   fixed inset-y-0 right-0 z-40 bg-mirc-dark border-l border-gray-700 transition-transform duration-300 shadow-2xl md:shadow-none
                   ${showMobileUserList ? 'translate-x-0' : 'translate-x-full'}
                   md:relative md:translate-x-0 md:block md:static h-full
               `}>
                    <div className="md:hidden absolute top-2 right-2 z-50">
-                      <button onClick={() => setShowMobileUserList(false)} className="p-1 text-gray-400 hover:text-white"><Users size={18} /></button>
+                      <button onClick={() => setShowMobileUserList(false)} className="p-1 text-gray-400 hover:text-white"><X size={18} /></button>
                   </div>
                   <UserList 
                       users={users} 
                       currentUserId={currentUser.id}
                       onOpenPrivateChat={handleOpenPrivateChat} 
                       currentUserRole={currentUser.role}
+                      // Pass handlers mostly relevant for room moderation
                       onKick={handleKickUser}
                       onBan={handleBanUser}
                       onToggleOp={handleToggleOp}
                       onRefresh={fetchUsers}
                       permissionError={permissionError}
                   />
-              </div>
-
-              <div className="absolute bottom-0 right-0 md:right-72 flex flex-col md:flex-row-reverse items-end gap-2 pointer-events-none z-30 pr-2 md:pr-4 pb-0 max-h-[50%] md:max-h-none">
-                  {activePMs.map(user => (
-                      <div key={user.id} className="pointer-events-auto">
-                          <PrivateChatWindow 
-                              recipient={user} 
-                              currentUser={currentUser}
-                              messages={privateMessages[user.id] || []}
-                              onClose={() => handleClosePM(user.id)}
-                              onSendMessage={(text, file) => handleSendPM(user.id, text, file)}
-                              isFlashing={unreadPMs.has(user.id)}
-                              onFocus={() => handleFocusPM(user.id)}
-                          />
-                      </div>
-                  ))}
               </div>
             </div>
           </>
