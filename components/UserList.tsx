@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle, AlertTriangle } from 'lucide-react';
+import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle, AlertTriangle, RefreshCcw } from 'lucide-react';
 
 interface UserListProps {
   users: User[];
@@ -10,6 +10,7 @@ interface UserListProps {
   onKick?: (user: User) => void;
   onBan?: (user: User) => void;
   onToggleOp?: (user: User) => void;
+  onRefresh?: () => void;
 }
 
 const UserList: React.FC<UserListProps> = ({ 
@@ -19,7 +20,8 @@ const UserList: React.FC<UserListProps> = ({
     currentUserRole,
     onKick,
     onBan,
-    onToggleOp
+    onToggleOp,
+    onRefresh
 }) => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; user: User | null } | null>(null);
 
@@ -41,11 +43,8 @@ const UserList: React.FC<UserListProps> = ({
 
   const getRoleColor = (user: User, isMe: boolean) => {
     if (user.banned) return "text-red-500 line-through decoration-2";
-    // Force Online color if it's me, regardless of server status delay
     if (isMe) return "text-green-400 font-semibold";
-    
     if (!user.isOnline && user.role !== UserRole.BOT) return "text-gray-500"; 
-
     switch (user.role) {
       case UserRole.ADMIN: return "text-yellow-400 font-bold shadow-yellow-400/20";
       case UserRole.OPERATOR: return "text-blue-400 font-semibold";
@@ -54,27 +53,16 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
-  // Visual Override: Current User is ALWAYS online in the sorted logic
   const sortedUsers = [...users].sort((a, b) => {
-      // Force "Me" to be treated as online for sorting
       const aOnline = a.id === currentUserId ? true : a.isOnline;
       const bOnline = b.id === currentUserId ? true : b.isOnline;
-
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
-      
-      // Role Priority
       if (roles[a.role] !== roles[b.role]) return roles[a.role] - roles[b.role];
-      
-      // Online Priority
       if (aOnline !== bOnline) return aOnline ? -1 : 1;
-      
-      // Name Priority
       return a.username.localeCompare(b.username);
   });
 
-  // Calculate counts (treating self as online)
   const onlineCount = users.filter(u => u.id === currentUserId || u.isOnline || u.role === UserRole.BOT).length;
-  
   const canKick = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.OPERATOR;
   const canBan = currentUserRole === UserRole.ADMIN;
   const canOp = currentUserRole === UserRole.ADMIN;
@@ -83,22 +71,31 @@ const UserList: React.FC<UserListProps> = ({
     <div className="w-48 md:w-64 bg-mirc-dark border-l border-gray-700 flex flex-col h-full overflow-hidden" onClick={closeMenu}>
       <div className="p-2 md:p-3 border-b border-gray-700 bg-mirc-darker/50 mt-8 md:mt-0">
         <h3 className="font-bold text-gray-400 text-[10px] md:text-xs uppercase tracking-widest flex items-center justify-between">
-           <span>Users</span>
+           <div className="flex items-center gap-2">
+             <span>Users</span>
+             {onRefresh && (
+               <button onClick={onRefresh} className="hover:text-white transition-colors" title="Force Refresh List">
+                 <RefreshCcw size={10} />
+               </button>
+             )}
+           </div>
            <span className="bg-slate-800 px-1.5 py-0.5 rounded text-mirc-cyan">{onlineCount}/{users.length}</span>
         </h3>
       </div>
       
       <div className="flex-1 overflow-y-auto p-1 md:p-2 space-y-0.5">
         {users.length <= 2 && (
-             <div className="p-2 text-[10px] text-gray-500 bg-slate-800/50 rounded mb-2 border border-slate-700/50">
-                <p className="flex items-center gap-1 mb-1 text-orange-400"><AlertTriangle size={10} /> Tip:</p>
-                If you don't see others, check PocketBase: <b>Settings &gt; API Rules &gt; Users &gt; List Rule</b> (Set to empty).
+             <div className="p-2 text-[10px] text-gray-400 bg-red-900/20 rounded mb-2 border border-red-500/20">
+                <p className="flex items-center gap-1 mb-1 text-red-400 font-bold"><AlertTriangle size={12} /> System Warning:</p>
+                Only you are visible. This is a <b>PocketBase Permission</b> issue.<br/><br/>
+                <b>Fix:</b> Go to PB Admin > Collections > <b>users</b> > Settings > <b>API Rules</b>.<br/>
+                Set <b>List rule</b> to <code>Empty</code> (Public) or <code>id != ""</code>.<br/>
+                <span className="text-gray-500 italic block mt-1">If it is "id = @request.auth.id", you will only see yourself.</span>
              </div>
         )}
 
         {sortedUsers.map((user) => {
             const isMe = user.id === currentUserId;
-            // Force visual online status for self
             const isOnline = isMe ? true : user.isOnline;
 
             return (
@@ -133,7 +130,6 @@ const UserList: React.FC<UserListProps> = ({
                         {user.username}
                         {isMe && <span className="ml-1 text-[9px] text-gray-400 font-normal">(You)</span>}
                     </span>
-                    {/* Only show 'Away' if it's NOT the current user AND they are offline */}
                     {!isOnline && user.role !== UserRole.BOT && (
                         <span className="text-[9px] text-gray-500 uppercase font-bold leading-none">Away</span>
                     )}
@@ -154,45 +150,31 @@ const UserList: React.FC<UserListProps> = ({
             <span className="text-[10px] md:text-xs text-gray-400 font-mono block">ACTIONS FOR</span>
             <span className="font-bold text-white text-sm">{contextMenu.user.username}</span>
           </div>
-          
           <button 
             className="w-full text-left px-3 py-1.5 md:px-4 md:py-2 hover:bg-mirc-pink hover:text-white flex items-center gap-2 text-xs md:text-sm"
             onClick={() => { onOpenPrivateChat(contextMenu.user!); closeMenu(); }}
           >
             <MessageCircle size={14} /> Private Message
           </button>
-
           {(canKick || canBan) && contextMenu.user.role !== UserRole.ADMIN && (
             <>
               <div className="h-px bg-slate-700 my-1 mx-2" />
-              
               {canKick && contextMenu.user.isOnline && (
-                  <button 
-                    onClick={() => { onKick?.(contextMenu.user!); closeMenu(); }}
-                    className="w-full text-left px-3 py-1.5 md:px-4 md:py-2 hover:bg-orange-500/20 hover:text-orange-400 flex items-center gap-2 text-xs md:text-sm text-orange-300"
-                  >
+                  <button onClick={() => { onKick?.(contextMenu.user!); closeMenu(); }} className="w-full text-left px-3 py-1.5 md:px-4 md:py-2 hover:bg-orange-500/20 hover:text-orange-400 flex items-center gap-2 text-xs md:text-sm text-orange-300">
                     <UserMinus size={14} /> Kick User
                   </button>
               )}
-
               {canBan && (
-                   <button 
-                    onClick={() => { onBan?.(contextMenu.user!); closeMenu(); }}
-                    className="w-full text-left px-3 py-1.5 md:px-4 md:py-2 hover:bg-red-500/20 hover:text-red-400 flex items-center gap-2 text-xs md:text-sm text-red-400"
-                   >
+                   <button onClick={() => { onBan?.(contextMenu.user!); closeMenu(); }} className="w-full text-left px-3 py-1.5 md:px-4 md:py-2 hover:bg-red-500/20 hover:text-red-400 flex items-center gap-2 text-xs md:text-sm text-red-400">
                     <Ban size={14} /> {contextMenu.user.banned ? "Unban User" : "Ban User"}
                    </button>
               )}
             </>
           )}
-
           {canOp && contextMenu.user.role !== UserRole.ADMIN && (
               <>
                 <div className="h-px bg-slate-700 my-1 mx-2" />
-                <button 
-                    onClick={() => { onToggleOp?.(contextMenu.user!); closeMenu(); }}
-                    className="w-full text-left px-3 py-1.5 md:px-4 md:py-2 hover:bg-blue-500/20 hover:text-blue-400 flex items-center gap-2 text-xs md:text-sm text-blue-300"
-                >
+                <button onClick={() => { onToggleOp?.(contextMenu.user!); closeMenu(); }} className="w-full text-left px-3 py-1.5 md:px-4 md:py-2 hover:bg-blue-500/20 hover:text-blue-400 flex items-center gap-2 text-xs md:text-sm text-blue-300">
                     <Shield size={14} /> {contextMenu.user.role === UserRole.OPERATOR ? "Remove OP" : "Make Operator"}
                 </button>
               </>

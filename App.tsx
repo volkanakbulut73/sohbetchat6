@@ -24,7 +24,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
   
-  // Split messages into DB (persistent) and Local (Bot/System) to prevent re-fetches from wiping Bot msgs
+  // Split messages into DB (persistent) and Local (Bot/System)
   const [dbMessages, setDbMessages] = useState<Message[]>([]);
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
   
@@ -37,7 +37,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [username, setUsername] = useState(''); // Used for registration
+  const [username, setUsername] = useState(''); 
   
   // API Key State
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -63,7 +63,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   // Combine DB and Local messages for display
   const allMessages = useMemo(() => {
-      // Merge and sort by creation time
       const combined = [...dbMessages, ...localMessages];
       return combined.sort((a, b) => new Date(a.created).getTime() - new Date(b.created).getTime());
   }, [dbMessages, localMessages]);
@@ -107,9 +106,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // --- Core Data Fetching ---
   
   const fetchUsers = useCallback(async () => {
-    // Only fetch if logged in to avoid 403s on login screen
     if (!pb.authStore.isValid) return;
 
+    // Define Bot User
     const bot: User = { 
         id: 'bot_ai', 
         username: BOT_NAME, 
@@ -123,9 +122,15 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     let fetchedUsers: User[] = [];
 
     try {
-        fetchedUsers = await pb.collection('users').getFullList<User>({ sort: 'username', requestKey: null });
+        // Explicitly set requestKey: null to avoid auto-cancellation issues
+        fetchedUsers = await pb.collection('users').getFullList<User>({ 
+            sort: 'username', 
+            requestKey: null,
+            headers: { 'x-no-cache': 'true' } // Force fresh fetch
+        });
     } catch(e: any) { 
-        // Silent fail - usually means list rule is locked
+        console.error("Failed to fetch users. Check API Rules!", e);
+        // Do not fail silently, keep empty list so we can show warning
     }
 
     const processedUsers = fetchedUsers.map(u => {
@@ -135,6 +140,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         return u;
     });
 
+    // Fallback: If list is empty (due to rules), ensure 'Me' is in it
     if (pb.authStore.isValid && pb.authStore.model) {
         const myId = pb.authStore.model.id;
         if (!processedUsers.find(u => u.id === myId)) {
@@ -161,18 +167,10 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // --- HEARTBEAT SYSTEM ---
   useEffect(() => {
     if (!currentUser) return;
-
     const heartbeat = async () => {
-        try {
-            await pb.collection('users').update(currentUser.id, { isOnline: true });
-        } catch (e) {
-            // Heartbeat failed
-        }
+        try { await pb.collection('users').update(currentUser.id, { isOnline: true }); } catch (e) {}
     };
-    
-    // Send immediately on login/mount
     heartbeat();
-
     const intervalId = setInterval(heartbeat, 30000); 
     return () => clearInterval(intervalId);
   }, [currentUser, pb]);
@@ -209,17 +207,14 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     init();
   }, [pb]);
 
-  // 1.5 Fetch Rooms (Only if logged in)
+  // 1.5 Fetch Rooms
   useEffect(() => {
-      if (!currentUser) return; // Don't fetch rooms if not logged in
-
+      if (!currentUser) return;
       const loadRooms = async () => {
         try {
             const roomsList = await pb.collection('rooms').getFullList<Room>({ sort: 'created' });
             setRooms(roomsList);
-            
             if (roomsList.length > 0) {
-                // Only set current room if not already set, to prevent jumping
                 setCurrentRoom(prev => prev || roomsList[0]);
             } else if (pb.authStore.isValid) {
                 try {
@@ -237,8 +232,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       loadRooms();
   }, [pb, currentUser]);
 
-  // 2. Strict Room Switch Logic (Clears chat ONLY when room changes)
+  // 2. Strict Room Switch Logic
   useEffect(() => {
+      // Only clear local messages if the Room ID actually changes
       if (currentRoom?.id && prevRoomIdRef.current !== currentRoom.id) {
           setLocalMessages([]);
           setDbMessages([]);
@@ -246,7 +242,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       }
   }, [currentRoom?.id]);
 
-  // 3. Message Subscription (Does NOT clear chat)
+  // 3. Message Subscription
   useEffect(() => {
     if (!currentRoom || !currentUser) return;
 
@@ -260,21 +256,17 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
           setDbMessages(msgs.items.reverse());
       } catch (e) { console.error("Error loading messages", e); }
     };
-    // Only fetch initially when room ID changes (or on mount)
     fetchMessages();
 
     const initSub = async () => {
         try {
             await pb.collection('messages').subscribe('*', function (e) {
-                // IMPORTANT: Check if the message belongs to CURRENT room
-                // We use currentRoom.id directly here as closure, which is fine since effect re-runs on room change
                 if (e.action === 'create' && e.record.room === currentRoom.id) {
                     const newMsg = e.record as unknown as Message;
                     if (!newMsg.expand?.user && newMsg.user) {
                         newMsg.expand = { user: usersMapRef.current.get(newMsg.user) };
                     }
                     setDbMessages((prev) => {
-                        // Avoid duplicates
                         if (prev.find(m => m.id === newMsg.id)) return prev;
                         return [...prev, newMsg];
                     });
@@ -302,14 +294,15 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   // 4. User Presence Subscription
   useEffect(() => {
-    if (!currentUser) return; // Only fetch users if logged in
+    if (!currentUser) return;
 
     fetchUsers();
-    const refreshInterval = setInterval(fetchUsers, 10000);
+    const refreshInterval = setInterval(fetchUsers, 15000); // 15s refresh
 
     const initUserSub = async () => {
         try {
             await pb.collection('users').subscribe('*', (e) => {
+                // When a user updates, just fetch the list to be safe
                 fetchUsers();
                 
                 const myId = pb.authStore.model?.id;
@@ -336,14 +329,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
   }, [fetchUsers, pb, currentUser]);
 
-  // 5. Auto Clear Msgs (Slow cleanup)
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-        setDbMessages([]); 
-        // We keep local messages to avoid user frustration
-    }, 60 * 60 * 1000); // 1 hour
-    return () => clearInterval(intervalId);
-  }, []);
+  // Removed Auto Clear Interval to prevent Bot messages from disappearing randomly
 
   // --- Handlers ---
 
@@ -355,9 +341,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
     try {
         if (authMode === 'register') {
-            // Register Flow
             try {
-                // Create user
                 await pb.collection('users').create({
                     username: username,
                     email: email,
@@ -368,45 +352,31 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     isOnline: true,
                     banned: false
                 });
-                
-                // If create successful, immediately login
                 await pb.collection('users').authWithPassword(email, password);
             } catch (err: any) {
-                console.error("Registration failed:", err);
-                let errorMsg = "Registration failed. ";
-                if (err.status === 400) errorMsg += "Username or Email might be taken.";
-                else if (err.status === 403) errorMsg += "Public registration is disabled in PocketBase settings.";
-                else errorMsg += err.message;
-                alert(errorMsg);
+                alert("Registration failed. " + err.message);
                 setIsLoading(false);
                 return;
             }
         } else {
-            // Login Flow
             try {
                 await pb.collection('users').authWithPassword(email, password);
             } catch (err: any) {
-                console.error("Login failed:", err);
-                alert("Login failed. Check your email/username and password.");
+                alert("Login failed.");
                 setIsLoading(false);
                 return;
             }
         }
 
-        // Post-Login Logic (Same for both paths)
         const model = pb.authStore.model;
         if (model) {
             if (model.banned) {
-                alert("This account is banned.");
+                alert("Banned.");
                 pb.authStore.clear();
                 setIsLoading(false);
                 return;
             }
-
-            try {
-                await pb.collection('users').update(model.id, { isOnline: true });
-            } catch (e) {}
-
+            try { await pb.collection('users').update(model.id, { isOnline: true }); } catch (e) {}
             setCurrentUser({
                 id: model.id,
                 username: model.username,
@@ -416,12 +386,10 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 updated: model.updated,
                 avatar: model.avatar ? pb.files.getUrl(model, model.avatar) : undefined
             });
-            // Reset forms
             setPassword('');
         }
     } catch (e: any) {
-        console.error("Auth process error:", e);
-        alert("Authentication error.");
+        alert("Auth error.");
     } finally {
         setIsLoading(false);
     }
@@ -429,9 +397,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   const handleLogout = async () => {
       if (currentUser) {
-          try {
-              pb.collection('users').update(currentUser.id, { isOnline: false });
-          } catch (e) {}
+          try { await pb.collection('users').update(currentUser.id, { isOnline: false }); } catch (e) {}
       }
       pb.authStore.clear();
       setDbMessages([]);
@@ -466,37 +432,31 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     }
 
     try {
-        // 1. Send user message to DB
         await pb.collection('messages').create({
             text: text,
             user: currentUser.id,
             room: currentRoom.id
         });
 
-        // 2. Check for Bot Trigger
         const lowerText = text.toLowerCase();
         const shouldTriggerBot = lowerText.includes('gemini') || lowerText.includes('@bot') || lowerText.includes('@ai');
         
         if (shouldTriggerBot) {
              const history = allMessages.slice(-5).map(m => `${usersMapRef.current.get(m.user)?.username || 'User'}: ${m.text}`);
              try {
-                // Generate
                 const botResponse = await generateBotResponse(text, history);
-                
-                // Create Bot Message Object
                 const botMsg: Message = {
-                    id: Math.random().toString(), // Temp ID
+                    id: Math.random().toString(), 
                     collectionId: 'messages',
                     collectionName: 'messages',
                     created: new Date().toISOString(),
                     updated: new Date().toISOString(),
                     text: botResponse,
-                    user: 'bot_ai', // Matches Bot User in list
+                    user: 'bot_ai',
                     room: currentRoom.id,
                     type: 'text'
                 };
-
-                // 3. Save to LOCAL state only (persistent against DB refreshes)
+                // Ensure we don't wipe previous bot messages
                 setLocalMessages(prev => [...prev, botMsg]);
              } catch (botError) {
                  console.error(botError);
@@ -507,14 +467,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   const handleToggleRoomLock = async () => {
       if (!currentRoom || !isModerator(currentUser)) return;
-      try {
-          await pb.collection('rooms').update(currentRoom.id, { isMuted: !currentRoom.isMuted });
-      } catch (e) {}
+      try { await pb.collection('rooms').update(currentRoom.id, { isMuted: !currentRoom.isMuted }); } catch (e) {}
   };
 
   const handleKickUser = async (userToKick: User) => {
     if (!isModerator(currentUser)) return;
-    if (userToKick.role === UserRole.ADMIN) return;
     try {
         await pb.collection('users').update(userToKick.id, { isOnline: false });
         await pb.collection('messages').create({
@@ -528,8 +485,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   const handleBanUser = async (userToBan: User) => {
     if (!isAdmin(currentUser)) return;
-    if (userToBan.role === UserRole.ADMIN) return;
-
     try {
         const newBanStatus = !userToBan.banned;
         await pb.collection('users').update(userToBan.id, { 
@@ -547,8 +502,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   const handleToggleOp = async (userToOp: User) => {
     if (!isAdmin(currentUser)) return;
-    if (userToOp.role === UserRole.ADMIN) return;
-
     try {
         const newRole = userToOp.role === UserRole.OPERATOR ? UserRole.USER : UserRole.OPERATOR;
         await pb.collection('users').update(userToOp.id, { role: newRole });
@@ -563,9 +516,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   const handleOpenPrivateChat = (user: User) => {
       if (user.id === currentUser?.id) return;
-      if (!activePMs.find(u => u.id === user.id)) {
-          setActivePMs(prev => [...prev, user]);
-      }
+      if (!activePMs.find(u => u.id === user.id)) setActivePMs(prev => [...prev, user]);
       setShowMobileUserList(false);
   };
 
@@ -622,7 +573,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   )}
 
                   <form onSubmit={handleAuth} className="space-y-4">
-                      {/* Register: Username Field */}
                       {authMode === 'register' && (
                           <div className="relative group">
                              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 group-focus-within:text-mirc-cyan transition-colors">
@@ -639,8 +589,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                               />
                           </div>
                       )}
-
-                      {/* Login/Register: Email Field */}
                       <div className="relative group">
                           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 group-focus-within:text-mirc-cyan transition-colors">
                               <Mail size={18} />
@@ -655,8 +603,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                               required
                           />
                       </div>
-
-                      {/* Login/Register: Password Field */}
                       <div className="relative group">
                           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 group-focus-within:text-mirc-cyan transition-colors">
                               <LockKeyhole size={18} />
@@ -673,7 +619,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                               minLength={5}
                           />
                       </div>
-
                       <button 
                           type="submit"
                           disabled={isLoading}
@@ -682,16 +627,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                           {isLoading ? <Loader2 className="animate-spin" size={20} /> : (authMode === 'login' ? "Connect" : "Register")}
                       </button>
                   </form>
-                  
                   <div className="mt-4 text-xs text-gray-400">
                       {authMode === 'login' ? (
-                          <p>
-                              New here? <button onClick={() => setAuthMode('register')} className="text-mirc-cyan hover:underline font-bold">Create Account</button>
-                          </p>
+                          <p>New here? <button onClick={() => setAuthMode('register')} className="text-mirc-cyan hover:underline font-bold">Create Account</button></p>
                       ) : (
-                          <p>
-                              Already have an account? <button onClick={() => setAuthMode('login')} className="text-mirc-cyan hover:underline font-bold">Login</button>
-                          </p>
+                          <p>Already have an account? <button onClick={() => setAuthMode('login')} className="text-mirc-cyan hover:underline font-bold">Login</button></p>
                       )}
                   </div>
               </div>
@@ -721,7 +661,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                                       className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${currentRoom?.id === room.id ? 'bg-mirc-pink text-white' : 'text-gray-300 hover:bg-white/5'}`}
                                   >
                                       <Hash size={12} /> {room.name}
-                                      {room.isMuted && <Lock size={10} className="text-red-400 ml-auto" />}
                                   </button>
                               ))}
                               {isModerator(currentUser) && (
@@ -734,16 +673,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                               )}
                           </div>
                       </div>
-                      
-                      {isModerator(currentUser) && currentRoom && (
-                          <button 
-                              onClick={handleToggleRoomLock}
-                              className={`p-1.5 rounded-full border transition-all ${currentRoom.isMuted ? 'bg-red-500/20 border-red-500 text-red-400' : 'border-gray-600 text-gray-400 hover:text-white'}`}
-                              title={currentRoom.isMuted ? "Unlock Room" : "Lock Room"}
-                          >
-                              {currentRoom.isMuted ? <Lock size={14} /> : <Unlock size={14} />}
-                          </button>
-                      )}
                   </div>
               </div>
 
@@ -752,25 +681,16 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
               </div>
 
               <div className="flex items-center gap-2 md:gap-3 shrink-0">
-                  <button 
-                      onClick={() => setShowMobileUserList(!showMobileUserList)}
-                      className={`md:hidden p-2 rounded-lg transition-colors ${showMobileUserList ? 'bg-mirc-pink text-white' : 'text-gray-400 hover:text-white'}`}
-                  >
-                      <Users size={20} />
-                  </button>
-
+                  <button onClick={() => setShowMobileUserList(!showMobileUserList)} className="md:hidden p-2 rounded-lg transition-colors text-gray-400 hover:text-white"><Users size={20} /></button>
                   <div className="flex flex-col items-end mr-1 hidden sm:flex">
                       <span className="text-sm font-bold text-gray-200">{currentUser.username}</span>
                       <div className="flex items-center gap-1">
                           {currentUser.role === UserRole.ADMIN && <span className="text-[9px] bg-yellow-500/20 text-yellow-400 px-1 rounded border border-yellow-500/50">ADMIN</span>}
-                          {currentUser.role === UserRole.OPERATOR && <span className="text-[9px] bg-blue-500/20 text-blue-400 px-1 rounded border border-blue-500/50">OP</span>}
                           <span className="text-[10px] text-green-400 font-mono">ONLINE</span>
                       </div>
                   </div>
                   <img src={currentUser.avatar || DEFAULT_AVATAR} className="w-8 h-8 md:w-9 md:h-9 rounded-full border border-gray-500" alt="me" />
-                  <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-400" title="Logout">
-                      <LogOut size={18} />
-                  </button>
+                  <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-400" title="Logout"><LogOut size={18} /></button>
               </div>
             </header>
 
@@ -778,17 +698,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
               <div className="flex-1 flex flex-col bg-slate-900/50 relative min-w-0 min-h-0 w-full">
                   {currentRoom ? (
                       <>
-                          <MessageList 
-                              messages={allMessages} 
-                              currentUser={currentUser} 
-                              usersMap={usersMap}
-                          />
-                          <ChatInput 
-                              onSendMessage={handleSendMessage} 
-                              allowAttachments={false}
-                              disabled={currentRoom.isMuted && !isModerator(currentUser)}
-                              isLocked={currentRoom.isMuted}
-                          />
+                          <MessageList messages={allMessages} currentUser={currentUser} usersMap={usersMap} />
+                          <ChatInput onSendMessage={handleSendMessage} allowAttachments={false} disabled={currentRoom.isMuted && !isModerator(currentUser)} isLocked={currentRoom.isMuted} />
                       </>
                   ) : (
                       <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-4">
@@ -803,10 +714,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   ${showMobileUserList ? 'translate-x-0' : 'translate-x-full'}
                   md:relative md:translate-x-0 md:block md:static h-full
               `}>
-                  <div className="md:hidden absolute top-2 right-2 z-50">
-                      <button onClick={() => setShowMobileUserList(false)} className="p-1 text-gray-400 hover:text-white">
-                          <Users size={18} />
-                      </button>
+                   <div className="md:hidden absolute top-2 right-2 z-50">
+                      <button onClick={() => setShowMobileUserList(false)} className="p-1 text-gray-400 hover:text-white"><Users size={18} /></button>
                   </div>
                   <UserList 
                       users={users} 
@@ -816,6 +725,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                       onKick={handleKickUser}
                       onBan={handleBanUser}
                       onToggleOp={handleToggleOp}
+                      onRefresh={fetchUsers}
                   />
               </div>
 
