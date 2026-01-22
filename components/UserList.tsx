@@ -88,7 +88,7 @@ const UserList: React.FC<UserListProps> = ({
              <div className="p-2 text-[10px] text-gray-400 bg-red-900/20 rounded mb-2 border border-red-500/20">
                 <p className="flex items-center gap-1 mb-1 text-red-400 font-bold"><AlertTriangle size={12} /> System Warning:</p>
                 Only you are visible. This is a <b>PocketBase Permission</b> issue.<br/><br/>
-                <b>Fix:</b> Go to PB Admin > Collections > <b>users</b> > Settings > <b>API Rules</b>.<br/>
+                <b>Fix:</b> Go to PB Admin &gt; Collections &gt; <b>users</b> &gt; Settings &gt; <b>API Rules</b>.<br/>
                 Set <b>List rule</b> to <code>Empty</code> (Public) or <code>id != ""</code>.<br/>
                 <span className="text-gray-500 italic block mt-1">If it is "id = @request.auth.id", you will only see yourself.</span>
              </div>
