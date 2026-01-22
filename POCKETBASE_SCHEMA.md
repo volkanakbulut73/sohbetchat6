@@ -40,7 +40,22 @@ To make the app function correctly with the provided code, configure your Pocket
     *   `isPlaying`: `bool`
 
 ### API Rules (Permissions)
-For the demo to work without complex backend logic:
-1.  **users**: List/View (Everyone), Create (Everyone/Public for registration), Update (Owner/Admin).
-2.  **rooms**: List/View (Everyone).
-3.  **messages**: List/View (Everyone), Create (Authenticated).
+**CRITICAL:** You must set these rules in PocketBase Admin UI (> Collections > Settings > API Rules) or the app will not work correctly.
+
+1.  **users**: 
+    *   List/View: Empty (Public)
+    *   Create: Empty (Public - for registration)
+    *   Update: `id = @request.auth.id` (Allows users to update their own online status/avatar)
+
+2.  **rooms**: 
+    *   List/View: Empty (Public)
+
+3.  **messages**: 
+    *   List/View: Empty (Public)
+    *   Create: `@request.auth.id != ""` (Authenticated users only)
+
+4.  **private_messages**:
+    *   **List/Search Rule:** `sender = @request.auth.id || recipient = @request.auth.id`
+    *   **View Rule:** `sender = @request.auth.id || recipient = @request.auth.id`
+    *   **Create Rule:** `sender = @request.auth.id`
+    *   **Update Rule:** `sender = @request.auth.id || recipient = @request.auth.id`

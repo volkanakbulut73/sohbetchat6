@@ -8,7 +8,7 @@ import MusicPlayer from './components/MusicPlayer';
 import UserList from './components/UserList';
 import ChatInput from './components/ChatInput';
 import MessageList from './components/MessageList';
-import { LogOut, Hash, Plus, Command, Bot, Users, Loader2, Key, Mail, User as UserIcon, LockKeyhole, WifiOff, X, MessageCircle, ChevronDown, Check } from 'lucide-react';
+import { LogOut, Hash, Plus, Command, Bot, Users, Loader2, Key, Mail, User as UserIcon, LockKeyhole, WifiOff, X, MessageCircle, ChevronDown, Check, AlertTriangle } from 'lucide-react';
 
 export interface CuteMIRCProps {
     pocketbaseUrl: string;
@@ -43,6 +43,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [permissionError, setPermissionError] = useState(false);
   const [realtimeError, setRealtimeError] = useState(false);
+  const [pmError, setPmError] = useState(false); // Track PM permission errors
   
   // Login & Register
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -291,6 +292,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   sort: 'created' // Get oldest first so we append
               });
               
+              setPmError(false); // Reset error state on success
+              
               const pmMap: Record<string, PrivateMessage[]> = {};
               
               recents.items.forEach(pm => {
@@ -332,7 +335,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                       }
                   }
               });
-          } catch (err) { console.error("PM Sub failed", err); }
+          } catch (err: any) { 
+              console.error("PM Sub failed", err); 
+              if (err.status === 403) {
+                  setPmError(true);
+              }
+          }
       };
       initPMSub();
       return () => { pb.collection('private_messages').unsubscribe('*').catch(()=>{}); }
@@ -375,6 +383,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       setDbMessages([]);
       setActivePMs([]);
       setPrivateMessages({});
+      setPmError(false);
   };
 
   const handleSendMessage = async (text: string, file?: File) => {
@@ -429,7 +438,13 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 formData.append('type', 'text');
             }
             await pb.collection('private_messages').create(formData);
-        } catch (e) { console.error("PM Send error", e); }
+        } catch (e: any) { 
+             console.error("PM Send error", e); 
+             if (e.status === 403) {
+                 alert("Cannot send private message: Permission denied. Check API Rules.");
+                 setPmError(true);
+             }
+        }
     }
   };
 
@@ -662,6 +677,17 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-400"><LogOut size={18}/></button>
               </div>
             </header>
+            
+            {/* PM PERMISSION ERROR BANNER */}
+            {pmError && (
+                 <div className="bg-red-900/90 text-white text-xs px-2 py-1 text-center border-b border-red-500 animate-in slide-in-from-top-2 flex items-center justify-center gap-2">
+                     <AlertTriangle size={14} className="text-yellow-400" />
+                     <span>
+                        <b>Private Chat Error:</b> Access denied. Please set API Rules for <b>private_messages</b> (List/View/Create/Update) to: 
+                        <code className="bg-black/30 px-1 rounded ml-1 select-all">sender = @request.auth.id || recipient = @request.auth.id</code>
+                     </span>
+                 </div>
+            )}
 
             {/* MAIN CONTENT AREA */}
             <div className="flex flex-1 overflow-hidden relative">
