@@ -48,16 +48,20 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // Private Chats
   const [activePMs, setActivePMs] = useState<User[]>([]);
   const [privateMessages, setPrivateMessages] = useState<Record<string, PrivateMessage[]>>({});
+  // Set of User IDs that have sent a message we haven't read yet (flashing state)
+  const [unreadPMs, setUnreadPMs] = useState<Set<string>>(new Set());
 
   // --- Refs ---
   const usersMapRef = useRef(usersMap);
   const currentUserRef = useRef(currentUser);
+  const activePMsRef = useRef(activePMs);
   
   // Track previous room ID to handle switching strictly
   const prevRoomIdRef = useRef<string | null>(null);
 
   useEffect(() => { usersMapRef.current = usersMap; }, [usersMap]);
   useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
+  useEffect(() => { activePMsRef.current = activePMs; }, [activePMs]);
 
   // --- Helpers ---
   const isModerator = (user: User | null) => user?.role === UserRole.ADMIN || user?.role === UserRole.OPERATOR;
@@ -124,25 +128,22 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     let fetchedUsers: User[] = [];
 
     try {
-        // Explicitly set requestKey: null to avoid auto-cancellation issues
         fetchedUsers = await pb.collection('users').getFullList<User>({ 
             sort: 'username', 
             requestKey: null,
-            headers: { 'x-no-cache': 'true' } // Force fresh fetch
+            headers: { 'x-no-cache': 'true' }
         });
     } catch(e: any) { 
         console.error("Failed to fetch users. Check API Rules!", e);
     }
 
     const processedUsers = fetchedUsers.map(u => {
-        // If it's me, force online visual state
         if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
             return { ...u, isOnline: true };
         }
         return u;
     });
 
-    // Fallback: If list is empty (due to rules), ensure 'Me' is in it
     if (pb.authStore.isValid && pb.authStore.model) {
         const myId = pb.authStore.model.id;
         if (!processedUsers.find(u => u.id === myId)) {
@@ -174,15 +175,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             await pb.collection('users').update(currentUser.id, { isOnline: true }); 
             setPermissionError(false);
         } catch (e: any) {
-            // 403 Forbidden or 404 Not Found usually means Permission Denied or Record Missing
             if (e.status === 403 || e.status === 404) {
                 setPermissionError(true);
-                console.error("Heartbeat failed: Update permission denied for 'users' collection.", e);
             }
         }
     };
     heartbeat();
-    // Increase frequency to every 20s to ensure "updated" timestamp stays fresh
     const intervalId = setInterval(heartbeat, 20000); 
     return () => clearInterval(intervalId);
   }, [currentUser, pb]);
@@ -253,7 +251,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       }
   }, [currentRoom?.id]);
 
-  // 3. Message Subscription
+  // 3. Message Subscription (Public Chat)
   useEffect(() => {
     if (!currentRoom || !currentUser) return;
 
@@ -272,7 +270,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     const initSub = async () => {
         try {
             await pb.collection('messages').subscribe('*', function (e) {
-                setRealtimeError(false); // Success!
+                setRealtimeError(false);
                 if (e.action === 'create' && e.record.room === currentRoom.id) {
                     const newMsg = e.record as unknown as Message;
                     if (!newMsg.expand?.user && newMsg.user) {
@@ -290,7 +288,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 }
             });
         } catch (err) {
-            console.error("Realtime subscription failed", err);
             setRealtimeError(true);
         }
     };
@@ -307,12 +304,66 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
   }, [currentRoom?.id, pb]); 
 
-  // 4. User Presence Subscription & Polling
+  // 4. Private Message Subscription (PMs)
+  useEffect(() => {
+      if (!currentUser) return;
+
+      const initPMSub = async () => {
+          try {
+              // Load recent PMs
+              // This is a simplified fetch; in a real app you'd want meaningful history per user
+              // For now, we rely on the subscription to populate live chats
+              
+              await pb.collection('private_messages').subscribe('*', (e) => {
+                  if (e.action === 'create') {
+                      const pm = e.record as unknown as PrivateMessage;
+                      const myId = currentUserRef.current?.id;
+                      
+                      // Check if this PM involves me
+                      if (pm.recipient === myId || pm.sender === myId) {
+                          const otherUserId = pm.sender === myId ? pm.recipient : pm.sender;
+                          const otherUser = usersMapRef.current.get(otherUserId);
+                          
+                          if (otherUser) {
+                              // Add message to state
+                              setPrivateMessages(prev => ({
+                                  ...prev,
+                                  [otherUserId]: [...(prev[otherUserId] || []), pm]
+                              }));
+
+                              // If I am the recipient, ensure window is open and FLASH it
+                              if (pm.recipient === myId) {
+                                  // Open window if not already in activePMs
+                                  const isActive = activePMsRef.current.some(u => u.id === otherUserId);
+                                  
+                                  if (!isActive) {
+                                      setActivePMs(prev => [...prev, otherUser]);
+                                  }
+                                  
+                                  // TRIGGER FLASH / UNREAD STATE
+                                  setUnreadPMs(prev => new Set(prev).add(otherUserId));
+                              }
+                          }
+                      }
+                  }
+              });
+          } catch (err) {
+              console.error("PM Sub failed", err);
+          }
+      };
+      initPMSub();
+
+      return () => {
+          pb.collection('private_messages').unsubscribe('*').catch(() => {});
+      }
+  }, [currentUser, pb]);
+
+
+  // 5. User Presence Subscription & Polling
   useEffect(() => {
     if (!currentUser) return;
 
     fetchUsers();
-    // AGGRESSIVE POLLING: Run every 5 seconds to fallback if realtime is 403
     const refreshInterval = setInterval(fetchUsers, 5000);
 
     const initUserSub = async () => {
@@ -329,7 +380,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 }
             });
         } catch (err) {
-            // Silently ignore user sub errors if global realtime is already known bad
         }
     };
     initUserSub();
@@ -346,7 +396,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   }, [fetchUsers, pb, currentUser]);
 
   // --- Handlers ---
-  // (Auth, Logout, Message handlers same as before)
   const handleAuth = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!email || !password || (authMode === 'register' && !username)) return;
@@ -459,6 +508,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
              const history = allMessages.slice(-5).map(m => `${usersMapRef.current.get(m.user)?.username || 'User'}: ${m.text}`);
              try {
                 const botResponse = await generateBotResponse(text, history);
+                // For public chat, we let the bot message just be local or we could save it to DB
+                // Saving to DB is better for persistence but requires bot logic on backend usually.
+                // We'll keep it local for simplicity in this frontend-only logic, 
+                // OR create it as the current user (impersonating bot) if we wanted persistence.
+                // Sticking to local visual for now.
                 const botMsg: Message = {
                     id: Math.random().toString(), 
                     collectionId: 'messages',
@@ -530,27 +584,53 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const handleOpenPrivateChat = (user: User) => {
       if (user.id === currentUser?.id) return;
       if (!activePMs.find(u => u.id === user.id)) setActivePMs(prev => [...prev, user]);
+      // Remove from unread when opening explicitly
+      setUnreadPMs(prev => {
+          const next = new Set(prev);
+          next.delete(user.id);
+          return next;
+      });
       setShowMobileUserList(false);
   };
 
   const handleClosePM = (userId: string) => {
       setActivePMs(prev => prev.filter(u => u.id !== userId));
+      setUnreadPMs(prev => {
+          const next = new Set(prev);
+          next.delete(userId);
+          return next;
+      });
   };
 
-  const handleSendPM = (recipientId: string, text: string, file?: File) => {
-      const newMsg: PrivateMessage = {
-          id: Math.random().toString(),
-          text: text || (file ? '[Attachment Sent]' : ''),
-          sender: currentUser!.id,
-          recipient: recipientId,
-          created: new Date().toISOString(),
-          attachment: file ? URL.createObjectURL(file) : undefined,
-          type: file ? 'image' : 'text'
-      };
-      setPrivateMessages(prev => ({
-          ...prev,
-          [recipientId]: [...(prev[recipientId] || []), newMsg]
-      }));
+  const handleFocusPM = (userId: string) => {
+      setUnreadPMs(prev => {
+          const next = new Set(prev);
+          next.delete(userId);
+          return next;
+      });
+  };
+
+  const handleSendPM = async (recipientId: string, text: string, file?: File) => {
+      if (!currentUser) return;
+      
+      try {
+          // Actually persist the message to PocketBase
+          await pb.collection('private_messages').create({
+              text: text || (file ? '[Attachment]' : ''),
+              sender: currentUser.id,
+              recipient: recipientId,
+              // We'd ideally handle file uploads here via FormData if file exists, 
+              // but keeping it simple as per original scope request.
+              // attachment: file ... 
+          });
+
+          // Local state update is handled by the Subscription, 
+          // but we can optimistic update here if we wanted.
+          // Subscription is usually fast enough.
+          
+      } catch (e) {
+          console.error("Failed to send PM", e);
+      }
   };
 
   return (
@@ -757,6 +837,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                               messages={privateMessages[user.id] || []}
                               onClose={() => handleClosePM(user.id)}
                               onSendMessage={(text, file) => handleSendPM(user.id, text, file)}
+                              isFlashing={unreadPMs.has(user.id)}
+                              onFocus={() => handleFocusPM(user.id)}
                           />
                       </div>
                   ))}

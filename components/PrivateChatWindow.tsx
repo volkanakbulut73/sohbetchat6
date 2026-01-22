@@ -8,18 +8,21 @@ interface PrivateChatWindowProps {
   messages: PrivateMessage[];
   onClose: () => void;
   onSendMessage: (text: string, file?: File) => void;
+  isFlashing?: boolean;
+  onFocus?: () => void;
 }
 
 const PrivateChatWindow: React.FC<PrivateChatWindowProps> = ({ 
-    recipient, currentUser, messages, onClose, onSendMessage 
+    recipient, currentUser, messages, onClose, onSendMessage, isFlashing, onFocus
 }) => {
     const [text, setText] = useState('');
     const [minimized, setMinimized] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const windowRef = useRef<HTMLDivElement>(null);
     
     useEffect(() => {
-        if (scrollRef.current) {
+        if (scrollRef.current && !minimized) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [messages, minimized]);
@@ -28,6 +31,7 @@ const PrivateChatWindow: React.FC<PrivateChatWindowProps> = ({
         if(!text.trim()) return;
         onSendMessage(text);
         setText('');
+        onFocus?.();
     };
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -35,34 +39,51 @@ const PrivateChatWindow: React.FC<PrivateChatWindowProps> = ({
             onSendMessage('', e.target.files[0]);
             e.target.value = '';
         }
+        onFocus?.();
     };
+    
+    const handleInteraction = () => {
+        onFocus?.();
+    }
 
     if (minimized) {
         return (
             <div 
-                className="w-48 bg-mirc-dark border border-mirc-pink/50 rounded-t-lg cursor-pointer flex items-center justify-between px-3 py-2 shadow-lg hover:bg-slate-800"
-                onClick={() => setMinimized(false)}
+                className={`
+                    w-48 border rounded-t-lg cursor-pointer flex items-center justify-between px-3 py-2 shadow-lg hover:brightness-110 transition-colors
+                    ${isFlashing 
+                        ? 'animate-flash font-bold border-red-500' 
+                        : 'bg-mirc-dark border-mirc-pink/50 text-gray-200'}
+                `}
+                onClick={() => { setMinimized(false); onFocus?.(); }}
             >
-                <span className="text-sm font-bold text-mirc-pink truncate">{recipient.username}</span>
-                <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                <span className={`text-sm font-bold truncate ${isFlashing ? '' : 'text-mirc-pink'}`}>{recipient.username}</span>
+                {!isFlashing && <span className="w-2 h-2 rounded-full bg-green-500"></span>}
             </div>
         );
     }
 
     return (
-        <div className="w-80 h-96 bg-mirc-darker border border-gray-700 rounded-t-lg shadow-2xl flex flex-col overflow-hidden">
+        <div 
+            ref={windowRef}
+            className="w-80 h-96 bg-mirc-darker border border-gray-700 rounded-t-lg shadow-2xl flex flex-col overflow-hidden"
+            onClick={handleInteraction}
+        >
             {/* Header */}
-            <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-2 border-b border-gray-700 flex justify-between items-center select-none">
+            <div className={`
+                p-2 border-b border-gray-700 flex justify-between items-center select-none transition-colors duration-200
+                ${isFlashing ? 'bg-red-600 animate-flash text-white' : 'bg-gradient-to-r from-slate-800 to-slate-900'}
+            `}>
                 <div className="flex items-center gap-2">
                     <div className="relative">
                         <img src={recipient.avatar || `https://ui-avatars.com/api/?name=${recipient.username}&background=random`} className="w-6 h-6 rounded-full" alt="" />
                         <span className={`absolute bottom-0 right-0 block w-2 h-2 rounded-full ring-1 ring-slate-900 ${recipient.isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
                     </div>
-                    <span className="font-bold text-sm text-gray-200">{recipient.username}</span>
+                    <span className={`font-bold text-sm ${isFlashing ? 'text-white' : 'text-gray-200'}`}>{recipient.username}</span>
                 </div>
                 <div className="flex items-center gap-1">
-                    <button onClick={() => setMinimized(true)} className="p-1 hover:text-white text-gray-400"><Minus size={14} /></button>
-                    <button onClick={onClose} className="p-1 hover:text-red-400 text-gray-400"><X size={14} /></button>
+                    <button onClick={() => setMinimized(true)} className={`p-1 hover:text-white ${isFlashing ? 'text-white' : 'text-gray-400'}`}><Minus size={14} /></button>
+                    <button onClick={onClose} className={`p-1 hover:text-white ${isFlashing ? 'text-white' : 'text-gray-400 hover:text-red-400'}`}><X size={14} /></button>
                 </div>
             </div>
 
@@ -114,6 +135,7 @@ const PrivateChatWindow: React.FC<PrivateChatWindowProps> = ({
                         value={text}
                         onChange={e => setText(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && handleSend()}
+                        onFocus={handleInteraction}
                         placeholder="Message..."
                     />
                     <button onClick={handleSend} className="bg-mirc-pink hover:bg-pink-600 text-white p-1 rounded">

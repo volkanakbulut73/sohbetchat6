@@ -30,11 +30,16 @@
             },
             animation: {
                 marquee: 'marquee 10s linear infinite',
+                flash: 'flash 1s steps(1, end) infinite',
             },
             keyframes: {
                 marquee: {
                     '0%': { transform: 'translateX(0%)' },
                     '100%': { transform: 'translateX(-100%)' },
+                },
+                flash: {
+                    '0%, 100%': { backgroundColor: '#1e293b', color: '#f472b6' }, /* Normal Dark */
+                    '50%': { backgroundColor: '#ef4444', color: '#ffffff' }, /* Red Alert */
                 }
             }
           }
