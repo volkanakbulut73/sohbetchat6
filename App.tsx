@@ -9,7 +9,7 @@ import UserList from './components/UserList';
 import ChatInput from './components/ChatInput';
 import MessageList from './components/MessageList';
 import PrivateChatWindow from './components/PrivateChatWindow';
-import { LogOut, Hash, Plus, Command, Bot, Users, Lock, Unlock, Loader2, Key, Mail, User as UserIcon, LockKeyhole } from 'lucide-react';
+import { LogOut, Hash, Plus, Command, Bot, Users, Lock, Unlock, Loader2, Key, Mail, User as UserIcon, LockKeyhole, WifiOff } from 'lucide-react';
 
 export interface CuteMIRCProps {
     pocketbaseUrl: string;
@@ -32,7 +32,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const [usersMap, setUsersMap] = useState<Map<string, User>>(new Map());
   const [showMobileUserList, setShowMobileUserList] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [permissionError, setPermissionError] = useState(false); // Track DB permission issues
+  const [permissionError, setPermissionError] = useState(false);
+  const [realtimeError, setRealtimeError] = useState(false);
   
   // Login & Register State
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -134,6 +135,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     }
 
     const processedUsers = fetchedUsers.map(u => {
+        // If it's me, force online visual state
         if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
             return { ...u, isOnline: true };
         }
@@ -172,6 +174,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             await pb.collection('users').update(currentUser.id, { isOnline: true }); 
             setPermissionError(false);
         } catch (e: any) {
+            // 403 Forbidden or 404 Not Found usually means Permission Denied or Record Missing
             if (e.status === 403 || e.status === 404) {
                 setPermissionError(true);
                 console.error("Heartbeat failed: Update permission denied for 'users' collection.", e);
@@ -179,7 +182,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         }
     };
     heartbeat();
-    const intervalId = setInterval(heartbeat, 30000); 
+    // Increase frequency to every 20s to ensure "updated" timestamp stays fresh
+    const intervalId = setInterval(heartbeat, 20000); 
     return () => clearInterval(intervalId);
   }, [currentUser, pb]);
 
@@ -242,7 +246,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   // 2. Strict Room Switch Logic
   useEffect(() => {
-      // Only clear local messages if the Room ID actually changes
       if (currentRoom?.id && prevRoomIdRef.current !== currentRoom.id) {
           setLocalMessages([]);
           setDbMessages([]);
@@ -269,6 +272,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     const initSub = async () => {
         try {
             await pb.collection('messages').subscribe('*', function (e) {
+                setRealtimeError(false); // Success!
                 if (e.action === 'create' && e.record.room === currentRoom.id) {
                     const newMsg = e.record as unknown as Message;
                     if (!newMsg.expand?.user && newMsg.user) {
@@ -285,7 +289,10 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     setCurrentRoom(e.record as unknown as Room);
                 }
             });
-        } catch (err) {}
+        } catch (err) {
+            console.error("Realtime subscription failed", err);
+            setRealtimeError(true);
+        }
     };
     initSub();
 
@@ -300,19 +307,18 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
   }, [currentRoom?.id, pb]); 
 
-  // 4. User Presence Subscription
+  // 4. User Presence Subscription & Polling
   useEffect(() => {
     if (!currentUser) return;
 
     fetchUsers();
-    const refreshInterval = setInterval(fetchUsers, 15000); // 15s refresh
+    // AGGRESSIVE POLLING: Run every 5 seconds to fallback if realtime is 403
+    const refreshInterval = setInterval(fetchUsers, 5000);
 
     const initUserSub = async () => {
         try {
             await pb.collection('users').subscribe('*', (e) => {
-                // When a user updates, just fetch the list to be safe
                 fetchUsers();
-                
                 const myId = pb.authStore.model?.id;
                 if (myId && e.record.id === myId && e.action === 'update') {
                     const updatedUser = e.record as unknown as User;
@@ -322,7 +328,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     }
                 }
             });
-        } catch (err) {}
+        } catch (err) {
+            // Silently ignore user sub errors if global realtime is already known bad
+        }
     };
     initUserSub();
 
@@ -337,10 +345,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
   }, [fetchUsers, pb, currentUser]);
 
-  // Removed Auto Clear Interval to prevent Bot messages from disappearing randomly
-
   // --- Handlers ---
-
+  // (Auth, Logout, Message handlers same as before)
   const handleAuth = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!email || !password || (authMode === 'register' && !username)) return;
@@ -426,7 +432,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   const handleSendMessage = async (text: string, file?: File) => {
     if (!currentUser || !currentRoom) return;
-    if (!text.trim()) return;
+    if (!text.trim() && !file) return;
 
     if (currentRoom.isMuted && !isModerator(currentUser)) {
         alert("Room is locked.");
@@ -464,7 +470,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     room: currentRoom.id,
                     type: 'text'
                 };
-                // Ensure we don't wipe previous bot messages
                 setLocalMessages(prev => [...prev, botMsg]);
              } catch (botError) {
                  console.error(botError);
@@ -653,6 +658,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                           <Command size={18} className="text-white" />
                       </div>
                       <span className="font-bold text-lg hidden md:block">WorkigomChat AI</span>
+                      {realtimeError && (
+                          <span className="flex items-center gap-1 text-[10px] text-red-400 bg-red-900/20 px-2 py-0.5 rounded border border-red-500/20 animate-pulse" title="Realtime connection failed. Falling back to polling.">
+                              <WifiOff size={10} /> Connection issues
+                          </span>
+                      )}
                   </div>
                   
                   <div className="relative group shrink-0 flex items-center gap-2">

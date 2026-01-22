@@ -49,13 +49,14 @@ const UserList: React.FC<UserListProps> = ({
       if (user.id === currentUserId) return true;
       if (user.isOnline) return true;
       
-      // Fallback: If updated within last 3 minutes, treat as online
-      // This helps if the "isOnline" update failed but another update succeeded, 
-      // or if there is a slight desync.
+      // Fallback: If updated within last 5 minutes (increased window due to polling), treat as online.
       const lastActive = new Date(user.updated).getTime();
       const now = new Date().getTime();
       const diff = now - lastActive;
-      return diff < 3 * 60 * 1000; // 3 minutes
+      
+      // If diff is negative (user time is in future relative to client), they are definitely online.
+      // If diff is less than 5 minutes, they are online.
+      return diff < 0 || diff < 5 * 60 * 1000; 
   };
 
   const getRoleColor = (user: User, isMe: boolean) => {
