@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Send, Image as ImageIcon, Lock, Palette, X, Bold, Italic, Underline, Smile, Mic, Square } from 'lucide-react';
 
 interface ChatInputProps {
@@ -27,6 +27,18 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  
+  // Track where the cursor should be after a render
+  const cursorTarget = useRef<number | null>(null);
+
+  // Apply cursor position after text update
+  useEffect(() => {
+      if (cursorTarget.current !== null && textareaRef.current) {
+          textareaRef.current.setSelectionRange(cursorTarget.current, cursorTarget.current);
+          textareaRef.current.focus();
+          cursorTarget.current = null;
+      }
+  }, [text]);
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -62,22 +74,39 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
 
       let newText = "";
       if (selectedText.length > 0) {
-          // Wrap selection
+          // Wrap selection: *bold*
           newText = `${before}${tag}${selectedText}${tag}${after}`;
+          // Put cursor after the closing tag
+          cursorTarget.current = start + tag.length + selectedText.length + tag.length;
       } else {
-          // Just insert cursor inside tags
+          // Just insert tags: **
           newText = `${before}${tag}${tag}${after}`;
+          // Put cursor BETWEEN the tags
+          cursorTarget.current = start + tag.length;
       }
       
       setText(newText);
-      textarea.focus();
-      // Move cursor inside tags? Skipping complexity for now
   };
 
   const handleEmojiClick = (emoji: string) => {
-      setText(prev => prev + emoji);
+      const textarea = textareaRef.current;
+      if (!textarea) {
+           setText(prev => prev + emoji);
+           return;
+      }
+
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const before = text.substring(0, start);
+      const after = text.substring(end);
+      
+      const newText = `${before}${emoji}${after}`;
+      setText(newText);
+      
+      // Cursor after emoji
+      cursorTarget.current = start + emoji.length;
+      
       setShowEmojiPicker(false);
-      textareaRef.current?.focus();
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -140,15 +169,17 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
       
       {/* Formatting Toolbar */}
       {!disabled && (
-          <div className="flex items-center px-2 py-1 bg-slate-950/50 border-b border-gray-800 gap-1 overflow-x-auto scrollbar-hide">
-             <button onClick={() => insertTag('*')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" title="Bold"><Bold size={14} /></button>
-             <button onClick={() => insertTag('_')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" title="Italic"><Italic size={14} /></button>
-             <button onClick={() => insertTag('~')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" title="Underline"><Underline size={14} /></button>
+          // CHANGED: Removed overflow-x-auto, added flex-wrap to prevent clipping of absolute children (popups)
+          <div className="flex items-center px-2 py-1 bg-slate-950/50 border-b border-gray-800 gap-1 flex-wrap">
+             <button type="button" onClick={() => insertTag('*')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" title="Bold"><Bold size={14} /></button>
+             <button type="button" onClick={() => insertTag('_')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" title="Italic"><Italic size={14} /></button>
+             <button type="button" onClick={() => insertTag('~')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" title="Underline"><Underline size={14} /></button>
              
              <div className="w-px h-4 bg-gray-700 mx-1" />
              
              <div className="relative">
                 <button 
+                    type="button"
                     onClick={() => setShowColorPicker(!showColorPicker)} 
                     className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10"
                     style={{ color: selectedColor || undefined }}
@@ -156,10 +187,10 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
                     <Palette size={14} />
                 </button>
                 {showColorPicker && (
-                    <div className="absolute bottom-full left-0 mb-2 p-2 bg-slate-800 border border-slate-600 rounded-lg shadow-xl flex gap-2 z-50">
-                        <button onClick={() => handleColorSelect(null)} className="w-5 h-5 rounded-full border border-gray-500 flex items-center justify-center"><X size={10} /></button>
+                    <div className="absolute bottom-full left-0 mb-2 p-2 bg-slate-800 border border-slate-600 rounded-lg shadow-xl flex gap-2 z-50 animate-in fade-in slide-in-from-bottom-2">
+                        <button type="button" onClick={() => handleColorSelect(null)} className="w-5 h-5 rounded-full border border-gray-500 flex items-center justify-center bg-transparent"><X size={10} /></button>
                         {presetColors.map(c => (
-                            <button key={c.hex} onClick={() => handleColorSelect(c.hex)} className={`w-5 h-5 rounded-full border border-gray-600 hover:scale-110 ${c.tw}`} />
+                            <button type="button" key={c.hex} onClick={() => handleColorSelect(c.hex)} className={`w-5 h-5 rounded-full border border-gray-600 hover:scale-110 transition-transform ${c.tw}`} />
                         ))}
                     </div>
                 )}
@@ -167,15 +198,16 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
 
              <div className="relative">
                 <button 
+                    type="button"
                     onClick={() => setShowEmojiPicker(!showEmojiPicker)} 
                     className={`p-1.5 rounded hover:bg-white/10 ${showEmojiPicker ? 'text-yellow-400' : 'text-gray-400 hover:text-white'}`}
                 >
                     <Smile size={14} />
                 </button>
                 {showEmojiPicker && (
-                    <div className="absolute bottom-full left-0 mb-2 w-64 p-2 bg-slate-800 border border-slate-600 rounded-lg shadow-xl grid grid-cols-8 gap-1 z-50 h-48 overflow-y-auto custom-scrollbar">
+                    <div className="absolute bottom-full left-0 mb-2 w-64 p-2 bg-slate-800 border border-slate-600 rounded-lg shadow-xl grid grid-cols-8 gap-1 z-50 h-48 overflow-y-auto custom-scrollbar animate-in fade-in slide-in-from-bottom-2">
                         {EMOJIS.map(emoji => (
-                            <button key={emoji} onClick={() => handleEmojiClick(emoji)} className="text-xl hover:bg-white/10 rounded p-1">{emoji}</button>
+                            <button type="button" key={emoji} onClick={() => handleEmojiClick(emoji)} className="text-xl hover:bg-white/10 rounded p-1">{emoji}</button>
                         ))}
                     </div>
                 )}
@@ -186,16 +218,16 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
              {allowAttachments && (
                  <>
                     {isRecording ? (
-                        <button onClick={stopRecording} className="flex items-center gap-2 px-2 py-0.5 bg-red-600 text-white rounded animate-pulse">
+                        <button type="button" onClick={stopRecording} className="flex items-center gap-2 px-2 py-0.5 bg-red-600 text-white rounded animate-pulse">
                             <Square size={12} fill="white" /> <span className="text-xs font-bold">REC</span>
                         </button>
                     ) : (
-                        <button onClick={startRecording} className="p-1.5 text-red-400 hover:text-red-300 rounded hover:bg-white/10" title="Voice Message">
+                        <button type="button" onClick={startRecording} className="p-1.5 text-red-400 hover:text-red-300 rounded hover:bg-white/10" title="Voice Message">
                             <Mic size={14} />
                         </button>
                     )}
                     
-                    <button onClick={() => fileInputRef.current?.click()} className="p-1.5 text-mirc-cyan hover:text-cyan-300 rounded hover:bg-white/10" title="Image">
+                    <button type="button" onClick={() => fileInputRef.current?.click()} className="p-1.5 text-mirc-cyan hover:text-cyan-300 rounded hover:bg-white/10" title="Image">
                         <ImageIcon size={14} />
                     </button>
                  </>
@@ -242,6 +274,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
 
         {!disabled && (
             <button
+            type="button"
             onClick={() => handleSubmit()}
             disabled={!text.trim()}
             className="p-2 bg-mirc-pink text-white rounded-lg hover:bg-pink-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform active:scale-95 mb-1"

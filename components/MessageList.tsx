@@ -1,16 +1,21 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Message, User } from '../types';
-import { Play } from 'lucide-react';
+import { Play, X, ZoomIn } from 'lucide-react';
+import { useMIRCContext } from '../context/MIRCContext';
 
 interface MessageListProps {
-  messages: Message[]; // Or PrivateMessage, strictly they share enough fields
+  messages: Message[];
   currentUser: User | null;
   usersMap: Map<string, User>;
-  isPrivate?: boolean; // Context flag
+  isPrivate?: boolean;
 }
 
 const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersMap, isPrivate = false }) => {
+  const { pb } = useMIRCContext();
   const scrollRef = useRef<HTMLDivElement>(null);
+  
+  // Lightbox State
+  const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -18,17 +23,12 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
     }
   }, [messages]);
 
-  // Enhanced parser for *bold*, _italic_, ~underline~ and colors
   const formatContent = (text: string) => {
     if (!text) return null;
     
-    // Split by tokens but keep delimiters to reconstruct
-    // This is a simple parser. For production, consider a proper AST parser.
-    // Order: Color -> Bold -> Italic -> Underline
-    
+    // Simple parser for styling
     let contentElements: React.ReactNode[] = [text];
 
-    // Helper to replace text with React Nodes based on regex
     const replaceWithTag = (
         nodes: React.ReactNode[], 
         regex: RegExp, 
@@ -40,18 +40,6 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
                 newNodes.push(node);
                 return;
             }
-            const parts = node.split(regex);
-            parts.forEach((part, i) => {
-                if (regex.test(part)) { // This check depends on how split works with capturing groups
-                   // Since split includes capturing groups, we need to verify logic.
-                   // Simpler approach: matchAll or manual scan.
-                   // Let's stick to a simpler recursive replacement or just basic HTML-like rendering for this demo
-                }
-            });
-            
-            // Simpler approach for this specific demo:
-            // Use split with capturing group.
-            // e.g. "foo *bar* baz".split(/(\*.*?\*)/g) -> ["foo ", "*bar*", " baz"]
             const splitParts = node.split(regex);
             splitParts.forEach((part, idx) => {
                  if (regex.test(part)) {
@@ -64,7 +52,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
         return newNodes;
     };
 
-    // 1. Color (//color #hex text) - Handle whole line overrides first
+    // Color
     const colorMatch = text.match(/^\/\/color\s+(#[0-9a-fA-F]{3,6})\s+(.*)/);
     let baseColor: string | undefined = undefined;
     let processText = text;
@@ -75,17 +63,13 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
         contentElements = [processText];
     }
 
-    // 2. Bold (*text*)
+    // Bold, Italic, Underline
     contentElements = replaceWithTag(contentElements, /(\*[^\*]+\*)/g, (match, i) => (
         <span key={`b-${i}`} className="font-bold">{match.slice(1, -1)}</span>
     ));
-
-    // 3. Italic (_text_)
     contentElements = replaceWithTag(contentElements, /(_[^_]+_)/g, (match, i) => (
         <span key={`i-${i}`} className="italic">{match.slice(1, -1)}</span>
     ));
-
-    // 4. Underline (~text~)
     contentElements = replaceWithTag(contentElements, /(~[^~]+~)/g, (match, i) => (
         <span key={`u-${i}`} className="underline">{match.slice(1, -1)}</span>
     ));
@@ -94,88 +78,118 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-2 md:p-4 space-y-2 md:space-y-3 bg-mirc-darker custom-scrollbar" ref={scrollRef}>
-      {messages.map((msg) => {
-        // Handle User Resolving (works for public and private msg structure)
-        let user: User | undefined;
-        let isMe = false;
-        
-        if (isPrivate) {
-            // Logic for PrivateMessage
-            // @ts-ignore - Dynamic check
-            isMe = msg.sender === currentUser?.id;
-            // @ts-ignore
-            const userId = isMe ? msg.sender : msg.sender; // In PM list, we want to see the sender's avatar
-            user = usersMap.get(userId);
-            // Fallback for current user if not in map
-            if (isMe && !user) user = currentUser!;
-        } else {
-            // Logic for Room Message
-             // @ts-ignore
-            user = msg.expand?.user || usersMap.get(msg.user);
-             // @ts-ignore
-            isMe = currentUser?.id === msg.user;
-        }
+    <>
+        <div className="flex-1 overflow-y-auto p-2 md:p-4 space-y-2 md:space-y-3 bg-mirc-darker custom-scrollbar" ref={scrollRef}>
+        {messages.map((msg) => {
+            let user: User | undefined;
+            let isMe = false;
+            
+            if (isPrivate) {
+                // @ts-ignore
+                isMe = msg.sender === currentUser?.id;
+                // @ts-ignore
+                const userId = isMe ? msg.sender : msg.sender;
+                user = usersMap.get(userId);
+                if (isMe && !user) user = currentUser!;
+            } else {
+                // @ts-ignore
+                user = msg.expand?.user || usersMap.get(msg.user);
+                // @ts-ignore
+                isMe = currentUser?.id === msg.user;
+            }
 
-        const isBot = user?.role === 'bot';
-        const isAction = msg.text?.startsWith('/me');
+            const isBot = user?.role === 'bot';
+            const isAction = msg.text?.startsWith('/me');
 
-        return (
-          <div key={msg.id} className={`flex items-start gap-2 md:gap-3 group ${isMe ? 'flex-row-reverse' : ''}`}>
-            {/* Avatar */}
-            {!isMe && (
-                <div className="shrink-0">
-                    <img 
-                        src={user?.avatar || `https://ui-avatars.com/api/?name=${user?.username || '?'}&background=random`} 
-                        className="w-8 h-8 rounded-full border border-gray-600" 
-                        alt="avatar" 
-                    />
-                </div>
-            )}
+            // Generate proper File URL using PB helper
+            const fileUrl = msg.attachment ? pb.files.getUrl(msg, msg.attachment) : null;
 
-            {/* Message Body */}
-            <div className={`flex flex-col max-w-[85%] md:max-w-[80%] ${isMe ? 'items-end' : 'items-start'}`}>
-               {!isAction && (
-                    <span className={`text-[10px] md:text-xs font-bold mb-0.5 ${isBot ? 'text-mirc-pink' : (isMe ? 'text-green-400' : 'text-mirc-cyan')}`}>
-                        {user?.username || 'Unknown'} 
-                        {isBot && <span className="ml-1 text-[9px] bg-mirc-pink text-white px-1 rounded">BOT</span>}
-                        <span className="text-[9px] text-gray-600 font-normal ml-2">{new Date(msg.created).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                    </span>
-               )}
-              
-              <div 
-                className={`
-                    py-1.5 px-2 md:py-2 md:px-3 rounded-lg text-xs md:text-sm font-mono break-words shadow-sm relative
-                    ${isAction 
-                        ? 'bg-transparent text-gray-300 italic w-full text-center border-none' 
-                        : isMe 
-                            ? 'bg-slate-700 text-white rounded-tr-none' 
-                            : 'bg-slate-800 text-gray-200 rounded-tl-none border border-slate-700'}
-                `}
-              >
-                {isAction && <span className="mr-2 text-mirc-pink">* {user?.username}</span>}
-                
-                {msg.type === 'audio' && msg.attachment ? (
-                     <div className="flex items-center gap-2 min-w-[200px]">
-                         <audio controls src={msg.attachment} className="h-8 w-full max-w-[250px]" />
-                     </div>
-                ) : msg.attachment ? (
-                     msg.type === 'image' ? (
-                        <img src={msg.attachment} alt="attachment" className="max-w-full rounded-md max-h-40 md:max-h-60" />
-                     ) : (
-                        <a href={msg.attachment} target="_blank" rel="noreferrer" className="text-blue-400 underline flex items-center gap-1">
-                            📎 Attachment
-                        </a>
-                     )
-                ) : (
-                    formatContent(msg.text)
+            return (
+            <div key={msg.id} className={`flex items-start gap-2 md:gap-3 group ${isMe ? 'flex-row-reverse' : ''}`}>
+                {!isMe && (
+                    <div className="shrink-0">
+                        <img 
+                            src={user?.avatar ? pb.files.getUrl(user, user.avatar) : `https://ui-avatars.com/api/?name=${user?.username || '?'}&background=random`} 
+                            className="w-8 h-8 rounded-full border border-gray-600 object-cover" 
+                            alt="avatar" 
+                        />
+                    </div>
                 )}
-              </div>
+
+                <div className={`flex flex-col max-w-[85%] md:max-w-[80%] ${isMe ? 'items-end' : 'items-start'}`}>
+                {!isAction && (
+                        <span className={`text-[10px] md:text-xs font-bold mb-0.5 ${isBot ? 'text-mirc-pink' : (isMe ? 'text-green-400' : 'text-mirc-cyan')}`}>
+                            {user?.username || 'Unknown'} 
+                            {isBot && <span className="ml-1 text-[9px] bg-mirc-pink text-white px-1 rounded">BOT</span>}
+                            <span className="text-[9px] text-gray-600 font-normal ml-2">{new Date(msg.created).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                        </span>
+                )}
+                
+                <div 
+                    className={`
+                        py-1.5 px-2 md:py-2 md:px-3 rounded-lg text-xs md:text-sm font-mono break-words shadow-sm relative
+                        ${isAction 
+                            ? 'bg-transparent text-gray-300 italic w-full text-center border-none' 
+                            : isMe 
+                                ? 'bg-slate-700 text-white rounded-tr-none' 
+                                : 'bg-slate-800 text-gray-200 rounded-tl-none border border-slate-700'}
+                    `}
+                >
+                    {isAction && <span className="mr-2 text-mirc-pink">* {user?.username}</span>}
+                    
+                    {fileUrl ? (
+                        <div className="mt-1">
+                             {msg.type === 'audio' ? (
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-[10px] uppercase font-bold opacity-70">Voice Message</span>
+                                    <audio controls src={fileUrl} className="h-8 w-full max-w-[200px]" />
+                                </div>
+                             ) : msg.type === 'image' ? (
+                                <div className="relative group/img cursor-pointer" onClick={() => setViewingImage(fileUrl)}>
+                                    <img 
+                                        src={fileUrl} 
+                                        alt="attachment" 
+                                        className="max-w-full rounded-md max-h-48 md:max-h-60 object-contain bg-black/20" 
+                                        loading="lazy"
+                                    />
+                                    <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/20 transition-colors flex items-center justify-center opacity-0 group-hover/img:opacity-100">
+                                        <ZoomIn className="text-white drop-shadow-md" />
+                                    </div>
+                                </div>
+                             ) : (
+                                <a href={fileUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-blue-400 hover:text-blue-300 underline p-2 bg-black/20 rounded">
+                                    📎 Download Attachment
+                                </a>
+                             )}
+                             {/* Show text caption if it's not just the default placeholder */}
+                             {msg.text && msg.text !== 'Image' && msg.text !== 'Voice Message' && (
+                                 <div className="mt-2 pt-2 border-t border-white/10">{formatContent(msg.text)}</div>
+                             )}
+                        </div>
+                    ) : (
+                        formatContent(msg.text)
+                    )}
+                </div>
+                </div>
             </div>
-          </div>
-        );
-      })}
-    </div>
+            );
+        })}
+        </div>
+
+        {/* Lightbox Modal */}
+        {viewingImage && (
+            <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setViewingImage(null)}>
+                <button className="absolute top-4 right-4 text-white hover:text-red-500 p-2 bg-black/50 rounded-full" onClick={() => setViewingImage(null)}>
+                    <X size={32} />
+                </button>
+                <img 
+                    src={viewingImage} 
+                    className="max-w-full max-h-full object-contain rounded shadow-2xl" 
+                    onClick={(e) => e.stopPropagation()} 
+                />
+            </div>
+        )}
+    </>
   );
 };
 
