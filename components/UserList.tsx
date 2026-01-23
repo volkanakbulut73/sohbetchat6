@@ -50,11 +50,16 @@ const UserList: React.FC<UserListProps> = ({
       
       const lastActive = new Date(user.updated).getTime();
       const now = new Date().getTime();
+      
+      // Safety check for invalid dates
+      if (isNaN(lastActive)) return user.isOnline;
+
       const diff = now - lastActive;
       
-      // STRICTER TIMEOUT CHECK
-      // If a user hasn't updated in 2 minutes, consider them offline regardless of DB flag
-      if (diff > 120 * 1000) {
+      // STRICTER TIMEOUT CHECK (RELAXED TO 5 MINUTES)
+      // If a user hasn't updated in 5 minutes (300s), they are definitely offline (stuck ghost).
+      // 5 minutes handles background tab throttling and minor clock skews better.
+      if (diff > 300 * 1000) {
           return false;
       }
       

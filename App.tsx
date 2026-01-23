@@ -175,9 +175,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     setUsersMap(new Map(allUsers.map(u => [u.id, u])));
   }, [pb]);
 
-  // --- Heartbeat ---
+  // --- Heartbeat & Window Focus ---
   useEffect(() => {
     if (!currentUser) return;
+    
+    // Heartbeat logic
     const heartbeat = async () => {
         try { 
             await pb.collection('users').update(currentUser.id, { isOnline: true }); 
@@ -188,8 +190,18 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     };
     heartbeat();
     const intervalId = setInterval(heartbeat, 20000); 
-    return () => clearInterval(intervalId);
-  }, [currentUser, pb]);
+
+    // Window Focus Refresh
+    const handleFocus = () => {
+        fetchUsers();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+        clearInterval(intervalId);
+        window.removeEventListener('focus', handleFocus);
+    };
+  }, [currentUser, pb, fetchUsers]);
 
   // --- Initial Load ---
   useEffect(() => {
@@ -336,7 +348,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   }
               });
           } catch (err: any) { 
-              console.error("PM Sub failed", err); 
+              // console.error("PM Sub failed", err); // Silenced to reduce noise
               if (err.status === 403) {
                   setPmError(true);
               }
@@ -671,7 +683,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
               </div>
 
               {/* Right: Music & Profile */}
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex-1 flex justify-end items-center gap-2 shrink-0">
                   <div className="hidden md:block"><MusicPlayer /></div>
                   <button onClick={() => setShowMobileUserList(!showMobileUserList)} className="md:hidden p-2 text-gray-400"><Users size={20}/></button>
                   <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-400"><LogOut size={18}/></button>
