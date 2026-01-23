@@ -47,23 +47,23 @@ const UserList: React.FC<UserListProps> = ({
   const isUserOnline = (user: User): boolean => {
       if (user.id === 'bot_ai') return true;
       if (user.id === currentUserId) return true;
-      if (user.isOnline) return true;
       
-      // Fallback: If updated within last 5 minutes (increased window due to polling), treat as online.
       const lastActive = new Date(user.updated).getTime();
       const now = new Date().getTime();
       const diff = now - lastActive;
       
-      // If diff is negative (user time is in future relative to client), they are definitely online.
-      // If diff is less than 5 minutes, they are online.
-      return diff < 0 || diff < 5 * 60 * 1000; 
+      // STRICTER TIMEOUT CHECK
+      // If a user hasn't updated in 2 minutes, consider them offline regardless of DB flag
+      if (diff > 120 * 1000) {
+          return false;
+      }
+      
+      return user.isOnline;
   };
 
   const getRoleColor = (user: User, isMe: boolean) => {
-    const online = isUserOnline(user);
     if (user.banned) return "text-red-500 line-through decoration-2";
     if (isMe) return "text-green-400 font-semibold";
-    if (!online && user.role !== UserRole.BOT) return "text-gray-500"; 
     switch (user.role) {
       case UserRole.ADMIN: return "text-yellow-400 font-bold shadow-yellow-400/20";
       case UserRole.OPERATOR: return "text-blue-400 font-semibold";
@@ -72,16 +72,17 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
-  const sortedUsers = [...users].sort((a, b) => {
-      const aOnline = isUserOnline(a);
-      const bOnline = isUserOnline(b);
+  // 1. FILTER: Only keep users who are effectively Online
+  const visibleUsers = users.filter(u => isUserOnline(u));
+
+  // 2. SORT: Sort the visible users by role then name
+  const sortedUsers = [...visibleUsers].sort((a, b) => {
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
       if (roles[a.role] !== roles[b.role]) return roles[a.role] - roles[b.role];
-      if (aOnline !== bOnline) return aOnline ? -1 : 1;
       return a.username.localeCompare(b.username);
   });
 
-  const onlineCount = users.filter(u => isUserOnline(u)).length;
+  const onlineCount = visibleUsers.length;
   const canKick = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.OPERATOR;
   const canBan = currentUserRole === UserRole.ADMIN;
   const canOp = currentUserRole === UserRole.ADMIN;
@@ -98,11 +99,12 @@ const UserList: React.FC<UserListProps> = ({
                </button>
              )}
            </div>
-           <span className="bg-slate-800 px-1.5 py-0.5 rounded text-mirc-cyan">{onlineCount}/{users.length}</span>
+           {/* Show count relative to total fetched (optional) or just visible */}
+           <span className="bg-slate-800 px-1.5 py-0.5 rounded text-mirc-cyan">{onlineCount} Online</span>
         </h3>
       </div>
       
-      <div className="flex-1 overflow-y-auto p-1 md:p-2 space-y-0.5">
+      <div className="flex-1 overflow-y-auto p-1 md:p-2 space-y-0.5 custom-scrollbar">
         
         {/* Permission Error Warning */}
         {permissionError && (
@@ -114,17 +116,8 @@ const UserList: React.FC<UserListProps> = ({
              </div>
         )}
 
-        {/* List Visibility Warning */}
-        {users.length <= 2 && !permissionError && (
-             <div className="p-2 text-[10px] text-gray-500 bg-slate-800/50 rounded mb-2 border border-slate-700/50">
-                <p className="flex items-center gap-1 mb-1 text-orange-400"><AlertTriangle size={10} /> Tip:</p>
-                If you don't see others, check PB <b>List Rule</b>. It should be Empty (Public).
-             </div>
-        )}
-
         {sortedUsers.map((user) => {
             const isMe = user.id === currentUserId;
-            const isOnline = isUserOnline(user);
 
             return (
               <div
@@ -133,8 +126,7 @@ const UserList: React.FC<UserListProps> = ({
                 onDoubleClick={() => onOpenPrivateChat(user)}
                 className={`
                     group flex items-center space-x-2 p-1.5 md:p-2 rounded cursor-pointer transition-all
-                    ${isOnline ? 'hover:bg-white/5 opacity-100' : 'opacity-50 hover:opacity-100 hover:bg-white/5 grayscale'} 
-                    border border-transparent hover:border-white/10
+                    hover:bg-white/5 opacity-100 border border-transparent hover:border-white/10
                 `}
               >
                 <div className="relative shrink-0">
@@ -148,7 +140,7 @@ const UserList: React.FC<UserListProps> = ({
                         {user.role !== UserRole.USER ? (
                             getRoleIcon(user.role)
                         ) : (
-                            <Circle size={8} className={isOnline ? "fill-green-500 text-green-500" : "fill-gray-500 text-gray-500"} />
+                            <Circle size={8} className="fill-green-500 text-green-500" />
                         )}
                     </div>
                 </div>
@@ -158,9 +150,6 @@ const UserList: React.FC<UserListProps> = ({
                         {user.username}
                         {isMe && <span className="ml-1 text-[9px] text-gray-400 font-normal">(You)</span>}
                     </span>
-                    {!isOnline && user.role !== UserRole.BOT && (
-                        <span className="text-[9px] text-gray-500 uppercase font-bold leading-none">Away</span>
-                    )}
                 </div>
 
                 {user.banned && <Lock size={12} className="text-red-500 ml-auto shrink-0" />}
@@ -187,7 +176,7 @@ const UserList: React.FC<UserListProps> = ({
           {(canKick || canBan) && contextMenu.user.role !== UserRole.ADMIN && (
             <>
               <div className="h-px bg-slate-700 my-1 mx-2" />
-              {canKick && contextMenu.user.isOnline && (
+              {canKick && (
                   <button onClick={() => { onKick?.(contextMenu.user!); closeMenu(); }} className="w-full text-left px-3 py-1.5 md:px-4 md:py-2 hover:bg-orange-500/20 hover:text-orange-400 flex items-center gap-2 text-xs md:text-sm text-orange-300">
                     <UserMinus size={14} /> Kick User
                   </button>
