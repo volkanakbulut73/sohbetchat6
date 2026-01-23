@@ -362,7 +362,8 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   useEffect(() => {
     if (!currentUser) return;
     fetchUsers();
-    const interval = setInterval(fetchUsers, 5000);
+    // Poll more frequently (3s) since Realtime (socket) seems to be failing with 403 for user
+    const interval = setInterval(fetchUsers, 3000);
     return () => clearInterval(interval);
   }, [currentUser, fetchUsers]);
 

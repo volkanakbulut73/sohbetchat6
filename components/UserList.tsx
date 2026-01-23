@@ -43,26 +43,17 @@ const UserList: React.FC<UserListProps> = ({
     }
   };
 
-  // Helper to determine if a user is effectively online based on boolean OR timestamp
+  // Helper to determine if a user is effectively online
   const isUserOnline = (user: User): boolean => {
+      // Always show Bot and Self
       if (user.id === 'bot_ai') return true;
       if (user.id === currentUserId) return true;
       
-      const lastActive = new Date(user.updated).getTime();
-      const now = new Date().getTime();
-      
-      // Safety check for invalid dates
-      if (isNaN(lastActive)) return user.isOnline;
-
-      const diff = now - lastActive;
-      
-      // STRICTER TIMEOUT CHECK (RELAXED TO 5 MINUTES)
-      // If a user hasn't updated in 5 minutes (300s), they are definitely offline (stuck ghost).
-      // 5 minutes handles background tab throttling and minor clock skews better.
-      if (diff > 300 * 1000) {
-          return false;
-      }
-      
+      // STRICTLY TRUST THE DB FLAG.
+      // Previously, we checked timestamps here, but if the backend permissions (API Rules) 
+      // are incorrect (returning 403), the 'updated' field won't change, causing active users 
+      // to disappear from the list. 
+      // We now rely solely on isOnline to ensure visibility.
       return user.isOnline;
   };
 
@@ -77,7 +68,7 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
-  // 1. FILTER: Only keep users who are effectively Online
+  // 1. FILTER: Only keep users who are Online according to DB
   const visibleUsers = users.filter(u => isUserOnline(u));
 
   // 2. SORT: Sort the visible users by role then name
@@ -115,7 +106,7 @@ const UserList: React.FC<UserListProps> = ({
         {permissionError && (
              <div className="p-2 text-[10px] text-gray-300 bg-red-900/40 rounded mb-2 border border-red-500/50">
                 <p className="flex items-center gap-1 mb-1 text-red-400 font-bold"><AlertTriangle size={12} /> Permission Error:</p>
-                You cannot update your Online status. Other users see you as "Away".<br/><br/>
+                You cannot update your Online status.<br/>
                 <b>Fix:</b> Go to PB Admin &gt; Collections &gt; <b>users</b> &gt; Settings &gt; <b>API Rules</b>.<br/>
                 Set <b>Update rule</b> to <code>id = @request.auth.id</code> or empty.
              </div>
