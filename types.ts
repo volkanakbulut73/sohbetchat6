@@ -1,10 +1,13 @@
 
-export enum UserRole {
-  ADMIN = 'admin',
-  OPERATOR = 'operator',
-  USER = 'user',
-  BOT = 'bot'
-}
+// Replaced enum with const object to avoid runtime export errors in some bundlers
+export const UserRole = {
+  ADMIN: 'admin',
+  OPERATOR: 'operator',
+  USER: 'user',
+  BOT: 'bot'
+} as const;
+
+export type UserRole = typeof UserRole[keyof typeof UserRole];
 
 export interface User {
   id: string;

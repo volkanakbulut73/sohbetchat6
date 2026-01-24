@@ -249,10 +249,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   // --- Public Message Subscription ---
   useEffect(() => {
     if (!activeRoomId || !currentUser) return;
-
-    // Only fetch if we are actually viewing a room (optimization)
-    // Actually, we should keep fetching to update state even if in PM? 
-    // For simplicity, let's fetch always for the activeRoomId
     
     const fetchMessages = async () => {
       try {
@@ -265,7 +261,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       } catch (e) { }
     };
     
-    // Clear old messages when switching rooms
     setLocalMessages([]);
     setDbMessages([]);
     fetchMessages();
@@ -298,13 +293,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
       const initPMSub = async () => {
           try {
-              // Load ALL recent PMs involves me (simplified)
               const recents = await pb.collection('private_messages').getList<PrivateMessage>(1, 200, {
                   filter: `sender="${currentUser.id}" || recipient="${currentUser.id}"`,
-                  sort: 'created' // Get oldest first so we append
+                  sort: 'created' 
               });
               
-              setPmError(false); // Reset error state on success
+              setPmError(false);
               
               const pmMap: Record<string, PrivateMessage[]> = {};
               
@@ -331,13 +325,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                               }));
 
                               if (pm.recipient === myId) {
-                                  // Add to active PMs if not present
                                   const isActive = activePMsRef.current.some(u => u.id === otherUserId);
                                   if (!isActive) {
                                       setActivePMs(prev => [...prev, otherUser]);
                                   }
                                   
-                                  // If not currently VIEWING this PM, mark unread
                                   const currentV = currentViewRef.current;
                                   if (currentV.type !== 'pm' || currentV.userId !== otherUserId) {
                                       setUnreadPMs(prev => new Set(prev).add(otherUserId));
@@ -348,7 +340,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                   }
               });
           } catch (err: any) { 
-              // console.error("PM Sub failed", err); // Silenced to reduce noise
               if (err.status === 403) {
                   setPmError(true);
               }
@@ -362,7 +353,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   useEffect(() => {
     if (!currentUser) return;
     fetchUsers();
-    // Poll more frequently (3s) since Realtime (socket) seems to be failing with 403 for user
+    // Poll to keep list fresh
     const interval = setInterval(fetchUsers, 3000);
     return () => clearInterval(interval);
   }, [currentUser, fetchUsers]);

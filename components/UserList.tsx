@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle, AlertTriangle, RefreshCcw } from 'lucide-react';
+import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle, AlertTriangle, RefreshCcw, HelpCircle } from 'lucide-react';
 
 interface UserListProps {
   users: User[];
@@ -44,16 +44,17 @@ const UserList: React.FC<UserListProps> = ({
   };
 
   // Helper to determine if a user is effectively online
+  // We rely PURELY on the DB flag now to avoid logic errors
   const isUserOnline = (user: User): boolean => {
       if (user.id === 'bot_ai') return true;
-      if (user.id === currentUserId) return true;
+      if (user.id === currentUserId) return true; // Always show self as online to self
       return user.isOnline;
   };
 
   const getRoleColor = (user: User, isMe: boolean, online: boolean) => {
     if (user.banned) return "text-red-500 line-through decoration-2";
     if (isMe) return "text-green-400 font-semibold";
-    if (!online) return "text-gray-600"; // Offline color
+    if (!online) return "text-gray-500"; // Offline color
     
     switch (user.role) {
       case UserRole.ADMIN: return "text-yellow-400 font-bold shadow-yellow-400/20";
@@ -68,7 +69,7 @@ const UserList: React.FC<UserListProps> = ({
       const aOnline = isUserOnline(a);
       const bOnline = isUserOnline(b);
       
-      // 1. Online status
+      // 1. Online status (Online on top)
       if (aOnline && !bOnline) return -1;
       if (!aOnline && bOnline) return 1;
 
@@ -84,6 +85,9 @@ const UserList: React.FC<UserListProps> = ({
   const canKick = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.OPERATOR;
   const canBan = currentUserRole === UserRole.ADMIN;
   const canOp = currentUserRole === UserRole.ADMIN;
+
+  // Check if we are the only one in the list (excluding bot) which suggests API Rule issues
+  const likelyPermissionIssue = users.length <= 2 && users.some(u => u.id === currentUserId);
 
   return (
     <div className="w-48 md:w-64 bg-mirc-dark border-l border-gray-700 flex flex-col h-full overflow-hidden" onClick={closeMenu}>
@@ -103,12 +107,20 @@ const UserList: React.FC<UserListProps> = ({
       
       <div className="flex-1 overflow-y-auto p-1 md:p-2 space-y-0.5 custom-scrollbar">
         
-        {/* Permission Error Warning */}
+        {/* Permission Error Warning (Write) */}
         {permissionError && (
              <div className="p-2 text-[10px] text-gray-300 bg-red-900/40 rounded mb-2 border border-red-500/50">
-                <p className="flex items-center gap-1 mb-1 text-red-400 font-bold"><AlertTriangle size={12} /> Permission Error:</p>
-                Status updates failed. You may appear offline.
+                <p className="flex items-center gap-1 mb-1 text-red-400 font-bold"><AlertTriangle size={12} /> Status Error:</p>
+                Could not update online status.
              </div>
+        )}
+
+        {/* Permission Warning (Read) - If user only sees themselves */}
+        {likelyPermissionIssue && !permissionError && (
+            <div className="p-2 text-[10px] text-gray-400 bg-slate-800/80 rounded mb-2 border border-yellow-500/30">
+               <p className="flex items-center gap-1 mb-1 text-yellow-400 font-bold"><HelpCircle size={12} /> Alone here?</p>
+               If others are online but not listed, check <b>PocketBase API Rules</b> for 'users' collection (List/View should be empty).
+            </div>
         )}
 
         {sortedUsers.map((user) => {
@@ -122,7 +134,7 @@ const UserList: React.FC<UserListProps> = ({
                 onDoubleClick={() => onOpenPrivateChat(user)}
                 className={`
                     group flex items-center space-x-2 p-1.5 md:p-2 rounded cursor-pointer transition-all
-                    ${online ? 'hover:bg-white/5 opacity-100' : 'opacity-40 hover:opacity-70 grayscale'}
+                    ${online ? 'hover:bg-white/5 opacity-100' : 'opacity-60 grayscale hover:opacity-80 hover:grayscale-0'}
                     border border-transparent hover:border-white/10
                 `}
               >
@@ -146,6 +158,7 @@ const UserList: React.FC<UserListProps> = ({
                     <span className={`text-xs md:text-sm truncate font-medium ${getRoleColor(user, isMe, online)}`}>
                         {user.username}
                         {isMe && <span className="ml-1 text-[9px] text-gray-400 font-normal">(You)</span>}
+                        {!online && <span className="ml-1 text-[9px] text-gray-600 italic">(Offline)</span>}
                     </span>
                 </div>
 
