@@ -67,11 +67,13 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const currentUserRef = useRef(currentUser);
   const activePMsRef = useRef(activePMs);
   const currentViewRef = useRef(currentView);
+  const usersRef = useRef(users);
 
   useEffect(() => { usersMapRef.current = usersMap; }, [usersMap]);
   useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
   useEffect(() => { activePMsRef.current = activePMs; }, [activePMs]);
   useEffect(() => { currentViewRef.current = currentView; }, [currentView]);
+  useEffect(() => { usersRef.current = users; }, [users]);
 
   // --- Helpers ---
   const isModerator = (user: User | null) => user?.role === UserRole.ADMIN || user?.role === UserRole.OPERATOR;
@@ -124,7 +126,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       }
   };
 
-  // --- Fetch Users ---
+  // --- 1. Fetch Users (Initial & Poll) ---
   const fetchUsers = useCallback(async () => {
     if (!pb.authStore.isValid) return;
 
@@ -148,12 +150,14 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     } catch(e) { console.error("Fetch users error", e); }
 
     const processedUsers = fetchedUsers.map(u => {
+        // If it's me, force online locally to avoid flicker
         if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
             return { ...u, isOnline: true };
         }
         return u;
     });
 
+    // Ensure 'Me' exists in the list even if DB hasn't synced
     if (pb.authStore.isValid && pb.authStore.model) {
         const myId = pb.authStore.model.id;
         if (!processedUsers.find(u => u.id === myId)) {
@@ -171,9 +175,60 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
     const realUsers = processedUsers.filter(u => u.id !== 'bot_ai');
     const allUsers = [...realUsers, bot];
+    
     setUsers(allUsers);
     setUsersMap(new Map(allUsers.map(u => [u.id, u])));
   }, [pb]);
+
+
+  // --- 2. Realtime User Subscription (CRITICAL FIX) ---
+  useEffect(() => {
+      if (!currentUser) return;
+
+      const subscribeToUsers = async () => {
+          try {
+            await pb.collection('users').subscribe('*', (e) => {
+                const record = e.record as unknown as User;
+                const action = e.action; // create, update, delete
+
+                setUsers(currentList => {
+                    const bot = currentList.find(u => u.id === 'bot_ai');
+                    const realUsers = currentList.filter(u => u.id !== 'bot_ai');
+                    
+                    let newList = [...realUsers];
+                    const existingIndex = newList.findIndex(u => u.id === record.id);
+
+                    if (action === 'delete') {
+                        if (existingIndex !== -1) newList.splice(existingIndex, 1);
+                    } else if (action === 'create') {
+                        if (existingIndex === -1) newList.push(record);
+                    } else if (action === 'update') {
+                        if (existingIndex !== -1) {
+                            newList[existingIndex] = record;
+                        } else {
+                            newList.push(record);
+                        }
+                    }
+
+                    if (bot) newList.push(bot);
+                    
+                    // Update map for quick lookup
+                    setUsersMap(new Map(newList.map(u => [u.id, u])));
+                    return newList;
+                });
+            });
+          } catch (err) {
+              console.error("Realtime user sub failed", err);
+          }
+      };
+
+      subscribeToUsers();
+
+      return () => {
+          pb.collection('users').unsubscribe('*').catch(()=>{});
+      };
+  }, [currentUser, pb]);
+
 
   // --- Heartbeat & Window Focus ---
   useEffect(() => {
@@ -189,7 +244,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         }
     };
     heartbeat();
-    const intervalId = setInterval(heartbeat, 20000); 
+    const intervalId = setInterval(heartbeat, 15000); // 15s heartbeat
 
     // Window Focus Refresh
     const handleFocus = () => {
@@ -349,12 +404,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       return () => { pb.collection('private_messages').unsubscribe('*').catch(()=>{}); }
   }, [currentUser, pb]);
 
-  // --- User Presence ---
+  // --- User Presence Polling (Fallback) ---
   useEffect(() => {
     if (!currentUser) return;
     fetchUsers();
-    // Poll to keep list fresh
-    const interval = setInterval(fetchUsers, 3000);
+    // Poll to keep list fresh, but less frequent since we have SSE
+    const interval = setInterval(fetchUsers, 10000);
     return () => clearInterval(interval);
   }, [currentUser, fetchUsers]);
 
