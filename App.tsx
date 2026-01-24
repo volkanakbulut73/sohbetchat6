@@ -468,7 +468,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
             // BOT LOGIC
             const lowerText = text.toLowerCase();
-            if (lowerText.includes('gemini') || lowerText.includes('@bot')) {
+            if (lowerText.includes('workigom') || lowerText.includes('@bot')) {
                  const history = allPublicMessages.slice(-5).map(m => `${usersMapRef.current.get(m.user)?.username}: ${m.text}`);
                  try {
                     const botResponse = await generateBotResponse(text, history);

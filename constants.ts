@@ -2,7 +2,7 @@ export const GEMINI_MODEL = 'gemini-3-flash-preview'; // Good balance for chat b
 
 export const DEFAULT_AVATAR = 'https://picsum.photos/50/50';
 
-export const BOT_NAME = 'Gemini AI';
+export const BOT_NAME = 'Workigom AI';
 export const BOT_ID_PLACEHOLDER = 'gemini_ai_bot_id'; 
 
 // MIRC Color Parser Regex helper
