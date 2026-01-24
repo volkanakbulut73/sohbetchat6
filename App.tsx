@@ -149,15 +149,12 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
         });
     } catch(e) { console.error("Fetch users error", e); }
 
-    const processedUsers = fetchedUsers.map(u => {
-        // If it's me, force online locally to avoid flicker
-        if (pb.authStore.isValid && u.id === pb.authStore.model?.id) {
-            return { ...u, isOnline: true };
-        }
-        return u;
-    });
+    // NOTE: We do NOT force 'isOnline: true' for ourselves locally anymore.
+    // We rely on the actual data to ensure our heartbeat logic is working.
+    // If we look offline to ourselves, it means our heartbeat failed.
+    const processedUsers = [...fetchedUsers];
 
-    // Ensure 'Me' exists in the list even if DB hasn't synced
+    // Ensure 'Me' exists in the list even if DB hasn't synced (just for initial load safety)
     if (pb.authStore.isValid && pb.authStore.model) {
         const myId = pb.authStore.model.id;
         if (!processedUsers.find(u => u.id === myId)) {
@@ -165,9 +162,9 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                 id: myId,
                 username: pb.authStore.model.username,
                 role: (pb.authStore.model.role as UserRole) || UserRole.USER,
-                isOnline: true,
+                isOnline: true, // Optimistic initial state only
                 created: pb.authStore.model.created,
-                updated: pb.authStore.model.updated
+                updated: new Date().toISOString() // Fresh timestamp
             };
             processedUsers.push(me);
         }
@@ -181,7 +178,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   }, [pb]);
 
 
-  // --- 2. Realtime User Subscription (CRITICAL FIX) ---
+  // --- 2. Realtime User Subscription ---
   useEffect(() => {
       if (!currentUser) return;
 
@@ -211,8 +208,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     }
 
                     if (bot) newList.push(bot);
-                    
-                    // Update map for quick lookup
                     setUsersMap(new Map(newList.map(u => [u.id, u])));
                     return newList;
                 });
@@ -223,19 +218,20 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       };
 
       subscribeToUsers();
-
-      return () => {
-          pb.collection('users').unsubscribe('*').catch(()=>{});
-      };
+      return () => { pb.collection('users').unsubscribe('*').catch(()=>{}); };
   }, [currentUser, pb]);
 
 
-  // --- Heartbeat & Window Focus ---
+  // --- 3. Heartbeat & Visibility Logic (IMPROVED) ---
   useEffect(() => {
     if (!currentUser) return;
     
-    // Heartbeat logic
-    const heartbeat = async () => {
+    // The heartbeat updates the record. PocketBase auto-updates the 'updated' timestamp.
+    const sendHeartbeat = async () => {
+        // If tab is hidden, we might skip or reduce frequency, 
+        // but here we just check permission errors.
+        if (document.hidden) return; 
+
         try { 
             await pb.collection('users').update(currentUser.id, { isOnline: true }); 
             setPermissionError(false);
@@ -243,18 +239,28 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             if (e.status === 403 || e.status === 404) setPermissionError(true);
         }
     };
-    heartbeat();
-    const intervalId = setInterval(heartbeat, 15000); // 15s heartbeat
 
-    // Window Focus Refresh
-    const handleFocus = () => {
-        fetchUsers();
+    // 1. Send immediately on mount
+    sendHeartbeat();
+
+    // 2. Interval (every 30 seconds is enough for "3 minute" logic)
+    const intervalId = setInterval(sendHeartbeat, 30000); 
+
+    // 3. Handle Visibility Change (User comes back to tab)
+    const handleVisibility = () => {
+        if (!document.hidden) {
+            // User returned! Beat immediately to show online
+            sendHeartbeat();
+            // And refresh the list to see others
+            fetchUsers();
+        }
     };
-    window.addEventListener('focus', handleFocus);
+
+    document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
         clearInterval(intervalId);
-        window.removeEventListener('focus', handleFocus);
+        document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [currentUser, pb, fetchUsers]);
 
@@ -403,15 +409,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       initPMSub();
       return () => { pb.collection('private_messages').unsubscribe('*').catch(()=>{}); }
   }, [currentUser, pb]);
-
-  // --- User Presence Polling (Fallback) ---
-  useEffect(() => {
-    if (!currentUser) return;
-    fetchUsers();
-    // Poll to keep list fresh, but less frequent since we have SSE
-    const interval = setInterval(fetchUsers, 10000);
-    return () => clearInterval(interval);
-  }, [currentUser, fetchUsers]);
 
   // --- Handlers ---
 

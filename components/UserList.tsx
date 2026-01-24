@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle, AlertTriangle, RefreshCcw, HelpCircle } from 'lucide-react';
+import { Shield, Star, Bot, MessageCircle, Ban, UserMinus, Lock, Circle, AlertTriangle, RefreshCcw, HelpCircle, Clock } from 'lucide-react';
 
 interface UserListProps {
   users: User[];
@@ -13,6 +13,8 @@ interface UserListProps {
   onRefresh?: () => void;
   permissionError?: boolean;
 }
+
+type UserStatus = 'online' | 'away' | 'offline';
 
 const UserList: React.FC<UserListProps> = ({ 
     users, 
@@ -43,35 +45,65 @@ const UserList: React.FC<UserListProps> = ({
     }
   };
 
-  // Helper to determine if a user is effectively online
-  // We rely PURELY on the DB flag now to avoid logic errors
-  const isUserOnline = (user: User): boolean => {
-      if (user.id === 'bot_ai') return true;
-      if (user.id === currentUserId) return true; // Always show self as online to self
-      return user.isOnline;
+  // SENIOR LOGIC: Time-based status instead of Boolean-based
+  // This prevents ghosting and handles "tab closed" scenarios gracefully
+  const getUserStatus = (user: User): UserStatus => {
+      if (user.id === 'bot_ai') return 'online';
+      
+      // Note: We deliberately DO NOT force "if (isMe) return 'online'"
+      // checking the timestamp locally ensures we know if our connection is alive.
+      
+      try {
+        const lastActive = new Date(user.updated).getTime();
+        const now = new Date().getTime();
+        const diffInMinutes = (now - lastActive) / 1000 / 60;
+        
+        // Thresholds:
+        // < 3 mins: Online (Active in chat or tab open)
+        // < 15 mins: Away (Tab might be backgrounded or just idle)
+        // > 15 mins: Offline
+        if (diffInMinutes < 3) return 'online';
+        if (diffInMinutes < 15) return 'away';
+        return 'offline';
+      } catch (e) {
+          // Fallback if timestamp is invalid but boolean is set (legacy support)
+          return user.isOnline ? 'online' : 'offline';
+      }
   };
 
-  const getRoleColor = (user: User, isMe: boolean, online: boolean) => {
+  const getRoleColor = (user: User, isMe: boolean, status: UserStatus) => {
     if (user.banned) return "text-red-500 line-through decoration-2";
     if (isMe) return "text-green-400 font-semibold";
-    if (!online) return "text-gray-500"; // Offline color
+    
+    if (status === 'offline') return "text-gray-500"; 
     
     switch (user.role) {
       case UserRole.ADMIN: return "text-yellow-400 font-bold shadow-yellow-400/20";
       case UserRole.OPERATOR: return "text-blue-400 font-semibold";
       case UserRole.BOT: return "text-mirc-pink font-mono";
-      default: return "text-gray-300";
+      default: return status === 'away' ? "text-orange-300" : "text-gray-300";
     }
   }
 
-  // SORT: Sort users: Online first, then by role, then by name
+  // Status Icon Helper
+  const getStatusIcon = (status: UserStatus) => {
+      switch(status) {
+          case 'online': return <Circle size={8} className="fill-current text-green-500" />;
+          case 'away': return <Clock size={10} className="text-orange-400" />; // Clock icon for away
+          case 'offline': return <Circle size={8} className="fill-current text-gray-600" />;
+      }
+  };
+
+  // SORT: Sort users: Online -> Away -> Offline, then Role, then Name
   const sortedUsers = [...users].sort((a, b) => {
-      const aOnline = isUserOnline(a);
-      const bOnline = isUserOnline(b);
+      const statusA = getUserStatus(a);
+      const statusB = getUserStatus(b);
       
-      // 1. Online status (Online on top)
-      if (aOnline && !bOnline) return -1;
-      if (!aOnline && bOnline) return 1;
+      const statusWeight = { 'online': 0, 'away': 1, 'offline': 2 };
+      
+      if (statusWeight[statusA] !== statusWeight[statusB]) {
+          return statusWeight[statusA] - statusWeight[statusB];
+      }
 
       // 2. Roles
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
@@ -81,7 +113,7 @@ const UserList: React.FC<UserListProps> = ({
       return a.username.localeCompare(b.username);
   });
 
-  const onlineCount = users.filter(u => isUserOnline(u)).length;
+  const onlineCount = users.filter(u => getUserStatus(u) === 'online').length;
   const canKick = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.OPERATOR;
   const canBan = currentUserRole === UserRole.ADMIN;
   const canOp = currentUserRole === UserRole.ADMIN;
@@ -125,7 +157,7 @@ const UserList: React.FC<UserListProps> = ({
 
         {sortedUsers.map((user) => {
             const isMe = user.id === currentUserId;
-            const online = isUserOnline(user);
+            const status = getUserStatus(user);
 
             return (
               <div
@@ -134,7 +166,7 @@ const UserList: React.FC<UserListProps> = ({
                 onDoubleClick={() => onOpenPrivateChat(user)}
                 className={`
                     group flex items-center space-x-2 p-1.5 md:p-2 rounded cursor-pointer transition-all
-                    ${online ? 'hover:bg-white/5 opacity-100' : 'opacity-60 grayscale hover:opacity-80 hover:grayscale-0'}
+                    ${status === 'online' ? 'hover:bg-white/5 opacity-100' : (status === 'away' ? 'hover:bg-white/5 opacity-80' : 'opacity-60 grayscale hover:opacity-80 hover:grayscale-0')}
                     border border-transparent hover:border-white/10
                 `}
               >
@@ -149,16 +181,17 @@ const UserList: React.FC<UserListProps> = ({
                         {user.role !== UserRole.USER ? (
                             getRoleIcon(user.role)
                         ) : (
-                            <Circle size={8} className={`fill-current ${online ? 'text-green-500' : 'text-gray-500'}`} />
+                            getStatusIcon(status)
                         )}
                     </div>
                 </div>
                 
                 <div className="flex flex-col overflow-hidden">
-                    <span className={`text-xs md:text-sm truncate font-medium ${getRoleColor(user, isMe, online)}`}>
+                    <span className={`text-xs md:text-sm truncate font-medium ${getRoleColor(user, isMe, status)}`}>
                         {user.username}
                         {isMe && <span className="ml-1 text-[9px] text-gray-400 font-normal">(You)</span>}
-                        {!online && <span className="ml-1 text-[9px] text-gray-600 italic">(Offline)</span>}
+                        {status === 'away' && <span className="ml-1 text-[9px] text-orange-400/70 italic">(Away)</span>}
+                        {status === 'offline' && <span className="ml-1 text-[9px] text-gray-600 italic">(Offline)</span>}
                     </span>
                 </div>
 
