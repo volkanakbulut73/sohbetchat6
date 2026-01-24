@@ -45,21 +45,16 @@ const UserList: React.FC<UserListProps> = ({
 
   // Helper to determine if a user is effectively online
   const isUserOnline = (user: User): boolean => {
-      // Always show Bot and Self
       if (user.id === 'bot_ai') return true;
       if (user.id === currentUserId) return true;
-      
-      // STRICTLY TRUST THE DB FLAG.
-      // Previously, we checked timestamps here, but if the backend permissions (API Rules) 
-      // are incorrect (returning 403), the 'updated' field won't change, causing active users 
-      // to disappear from the list. 
-      // We now rely solely on isOnline to ensure visibility.
       return user.isOnline;
   };
 
-  const getRoleColor = (user: User, isMe: boolean) => {
+  const getRoleColor = (user: User, isMe: boolean, online: boolean) => {
     if (user.banned) return "text-red-500 line-through decoration-2";
     if (isMe) return "text-green-400 font-semibold";
+    if (!online) return "text-gray-600"; // Offline color
+    
     switch (user.role) {
       case UserRole.ADMIN: return "text-yellow-400 font-bold shadow-yellow-400/20";
       case UserRole.OPERATOR: return "text-blue-400 font-semibold";
@@ -68,17 +63,24 @@ const UserList: React.FC<UserListProps> = ({
     }
   }
 
-  // 1. FILTER: Only keep users who are Online according to DB
-  const visibleUsers = users.filter(u => isUserOnline(u));
+  // SORT: Sort users: Online first, then by role, then by name
+  const sortedUsers = [...users].sort((a, b) => {
+      const aOnline = isUserOnline(a);
+      const bOnline = isUserOnline(b);
+      
+      // 1. Online status
+      if (aOnline && !bOnline) return -1;
+      if (!aOnline && bOnline) return 1;
 
-  // 2. SORT: Sort the visible users by role then name
-  const sortedUsers = [...visibleUsers].sort((a, b) => {
+      // 2. Roles
       const roles = { [UserRole.ADMIN]: 0, [UserRole.OPERATOR]: 1, [UserRole.BOT]: 2, [UserRole.USER]: 3 };
       if (roles[a.role] !== roles[b.role]) return roles[a.role] - roles[b.role];
+      
+      // 3. Name
       return a.username.localeCompare(b.username);
   });
 
-  const onlineCount = visibleUsers.length;
+  const onlineCount = users.filter(u => isUserOnline(u)).length;
   const canKick = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.OPERATOR;
   const canBan = currentUserRole === UserRole.ADMIN;
   const canOp = currentUserRole === UserRole.ADMIN;
@@ -95,8 +97,7 @@ const UserList: React.FC<UserListProps> = ({
                </button>
              )}
            </div>
-           {/* Show count relative to total fetched (optional) or just visible */}
-           <span className="bg-slate-800 px-1.5 py-0.5 rounded text-mirc-cyan">{onlineCount} Online</span>
+           <span className="bg-slate-800 px-1.5 py-0.5 rounded text-mirc-cyan">{onlineCount} / {users.length}</span>
         </h3>
       </div>
       
@@ -106,14 +107,13 @@ const UserList: React.FC<UserListProps> = ({
         {permissionError && (
              <div className="p-2 text-[10px] text-gray-300 bg-red-900/40 rounded mb-2 border border-red-500/50">
                 <p className="flex items-center gap-1 mb-1 text-red-400 font-bold"><AlertTriangle size={12} /> Permission Error:</p>
-                You cannot update your Online status.<br/>
-                <b>Fix:</b> Go to PB Admin &gt; Collections &gt; <b>users</b> &gt; Settings &gt; <b>API Rules</b>.<br/>
-                Set <b>Update rule</b> to <code>id = @request.auth.id</code> or empty.
+                Status updates failed. You may appear offline.
              </div>
         )}
 
         {sortedUsers.map((user) => {
             const isMe = user.id === currentUserId;
+            const online = isUserOnline(user);
 
             return (
               <div
@@ -122,7 +122,8 @@ const UserList: React.FC<UserListProps> = ({
                 onDoubleClick={() => onOpenPrivateChat(user)}
                 className={`
                     group flex items-center space-x-2 p-1.5 md:p-2 rounded cursor-pointer transition-all
-                    hover:bg-white/5 opacity-100 border border-transparent hover:border-white/10
+                    ${online ? 'hover:bg-white/5 opacity-100' : 'opacity-40 hover:opacity-70 grayscale'}
+                    border border-transparent hover:border-white/10
                 `}
               >
                 <div className="relative shrink-0">
@@ -136,13 +137,13 @@ const UserList: React.FC<UserListProps> = ({
                         {user.role !== UserRole.USER ? (
                             getRoleIcon(user.role)
                         ) : (
-                            <Circle size={8} className="fill-green-500 text-green-500" />
+                            <Circle size={8} className={`fill-current ${online ? 'text-green-500' : 'text-gray-500'}`} />
                         )}
                     </div>
                 </div>
                 
                 <div className="flex flex-col overflow-hidden">
-                    <span className={`text-xs md:text-sm truncate font-medium ${getRoleColor(user, isMe)}`}>
+                    <span className={`text-xs md:text-sm truncate font-medium ${getRoleColor(user, isMe, online)}`}>
                         {user.username}
                         {isMe && <span className="ml-1 text-[9px] text-gray-400 font-normal">(You)</span>}
                     </span>
