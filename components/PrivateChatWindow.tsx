@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, PrivateMessage } from '../types';
-import { X, Minus, Send, Image as ImageIcon, ZoomIn } from 'lucide-react';
+import { X, Minus, Send, Image as ImageIcon, ZoomIn, Music, FileText } from 'lucide-react';
 import { useMIRCContext } from '../context/MIRCContext';
 
 interface PrivateChatWindowProps {
@@ -50,6 +50,19 @@ const PrivateChatWindow: React.FC<PrivateChatWindowProps> = ({
         onFocus?.();
     }
 
+    // Helper to detect file type even if DB 'type' field is missing
+    const getFileType = (msg: PrivateMessage): 'image' | 'audio' | 'file' => {
+        if (msg.type === 'image') return 'image';
+        if (msg.type === 'audio') return 'audio';
+        
+        if (msg.attachment) {
+            const lower = msg.attachment.toLowerCase();
+            if (/\.(jpg|jpeg|png|gif|webp|svg|bmp)$/.test(lower)) return 'image';
+            if (/\.(mp3|wav|ogg|webm|m4a)$/.test(lower)) return 'audio';
+        }
+        return 'file';
+    };
+
     if (minimized) {
         return (
             <div 
@@ -97,26 +110,40 @@ const PrivateChatWindow: React.FC<PrivateChatWindowProps> = ({
                     {messages.map(msg => {
                         const isMe = msg.sender === currentUser.id;
                         const fileUrl = msg.attachment ? pb.files.getUrl(msg, msg.attachment) : null;
+                        const fileType = getFileType(msg);
 
                         return (
                             <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[85%] rounded px-2 py-1 text-sm ${isMe ? 'bg-mirc-pink/20 text-pink-100' : 'bg-slate-800 text-gray-300'}`}>
+                                <div className={`max-w-[85%] rounded px-2 py-1 text-sm break-words ${isMe ? 'bg-mirc-pink/20 text-pink-100' : 'bg-slate-800 text-gray-300'}`}>
                                     {fileUrl ? (
                                         <div className="flex flex-col gap-1">
-                                            {msg.type === 'image' ? (
+                                            {fileType === 'image' ? (
                                                 <div className="relative group cursor-pointer" onClick={() => setViewingImage(fileUrl)}>
-                                                    <img src={fileUrl} alt="attachment" className="max-w-full rounded mb-1 max-h-32 object-contain" />
-                                                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/30 transition-opacity">
-                                                        <ZoomIn size={16} className="text-white"/>
+                                                    <img 
+                                                        src={fileUrl} 
+                                                        alt="attachment" 
+                                                        className="w-full rounded mb-1 max-h-40 object-cover bg-black/20" 
+                                                        loading="lazy"
+                                                    />
+                                                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity rounded">
+                                                        <ZoomIn size={16} className="text-white drop-shadow-md"/>
                                                     </div>
                                                 </div>
-                                            ) : msg.type === 'audio' ? (
-                                                <audio controls src={fileUrl} className="h-8 w-48" />
+                                            ) : fileType === 'audio' ? (
+                                                <div className="flex items-center gap-2 bg-black/20 p-1.5 rounded">
+                                                    <Music size={16} className="text-mirc-cyan shrink-0" />
+                                                    <audio controls src={fileUrl} className="h-6 w-36 md:w-48" />
+                                                </div>
                                             ) : (
-                                                <a href={fileUrl} target="_blank" className="italic text-blue-300 underline">Download File</a>
+                                                <a href={fileUrl} target="_blank" className="flex items-center gap-2 text-blue-300 hover:text-white bg-black/20 p-1.5 rounded">
+                                                    <FileText size={14} />
+                                                    <span className="underline italic truncate max-w-[150px]">{msg.attachment}</span>
+                                                </a>
                                             )}
+                                            
+                                            {/* Hide text if it's just the placeholder for files */}
                                             {(msg.text && msg.text !== 'Image' && msg.text !== 'Voice Message') && (
-                                                 <span className="text-xs opacity-70 border-t border-white/10 pt-1 mt-1 block">{msg.text}</span>
+                                                 <span className="text-xs opacity-90 border-t border-white/10 pt-1 mt-1 block">{msg.text}</span>
                                             )}
                                         </div>
                                     ) : (
@@ -134,6 +161,7 @@ const PrivateChatWindow: React.FC<PrivateChatWindowProps> = ({
                         <button 
                             className="text-gray-400 hover:text-white p-1"
                             onClick={() => fileInputRef.current?.click()}
+                            title="Send Image"
                         >
                             <ImageIcon size={16} />
                         </button>

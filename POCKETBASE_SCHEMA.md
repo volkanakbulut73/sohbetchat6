@@ -29,6 +29,7 @@ To make the app function correctly with the provided code, configure your Pocket
     *   `text`: `text`
     *   `sender`: `relation` (Single, Collection: `users`)
     *   `recipient`: `relation` (Single, Collection: `users`)
+    *   `type`: `select` (Options: `text`, `image`, `audio`. Default: `text`)
     *   `attachment`: `file`
     *   `read`: `bool`
 
