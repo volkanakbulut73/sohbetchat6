@@ -642,29 +642,74 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             <header className="h-14 bg-slate-800/90 backdrop-blur-md border-b border-gray-700 flex items-center justify-between px-2 gap-2 sticky top-0 z-30 shrink-0">
               
               {/* Left: Logo & Room Selector */}
-              <div className="flex items-center gap-2 shrink-0">
-                   <div className="w-8 h-8 bg-gradient-to-br from-mirc-pink to-purple-500 rounded-lg flex items-center justify-center shrink-0">
+              <div className="flex items-center gap-3 shrink-0">
+                   <div className="w-9 h-9 bg-gradient-to-br from-mirc-pink to-purple-600 rounded-xl shadow-lg shadow-purple-500/20 flex items-center justify-center shrink-0 border border-white/10">
                       <Command size={18} className="text-white" />
                    </div>
                    
                    {/* Room Dropdown */}
-                   <div className="relative group">
-                      <button className={`
-                          flex items-center gap-2 px-3 py-1.5 rounded-l-full border-y border-l border-gray-600 text-xs md:text-sm transition-colors max-w-[120px] truncate
-                          ${currentView.type === 'room' ? 'bg-mirc-cyan/10 border-mirc-cyan text-mirc-cyan font-bold' : 'bg-slate-900 text-gray-400 hover:text-white'}
-                      `}>
-                          <Hash size={14} />
-                          <span className="truncate">{currentRoomObj?.name || 'Select Room'}</span>
-                          <ChevronDown size={12} className="ml-1 opacity-50" />
+                   <div className="relative group z-50">
+                      <button className="flex items-center gap-3 px-3 py-1.5 md:px-4 md:py-2 bg-slate-800/50 hover:bg-slate-800 border border-slate-700 hover:border-mirc-cyan rounded-full transition-all duration-300 shadow-sm hover:shadow-mirc-cyan/20 group-hover:w-auto">
+                          <div className={`p-1.5 rounded-full shrink-0 transition-colors ${currentRoomObj?.isMuted ? 'bg-red-500/20 text-red-400' : 'bg-mirc-cyan/20 text-mirc-cyan'}`}>
+                              {currentRoomObj?.isMuted ? <LockKeyhole size={14} /> : <Hash size={14} />}
+                          </div>
+                          
+                          <div className="flex flex-col items-start text-left hidden md:flex">
+                              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider leading-none mb-0.5">Current Channel</span>
+                              <span className="text-sm font-bold text-gray-100 max-w-[100px] lg:max-w-[140px] truncate leading-none">{currentRoomObj?.name || 'Select Room'}</span>
+                          </div>
+                          <span className="md:hidden font-bold text-sm text-gray-100 max-w-[80px] truncate">{currentRoomObj?.name}</span>
+
+                          <ChevronDown size={14} className="text-gray-500 group-hover:text-white transition-colors ml-1" />
                       </button>
-                      {/* Room Menu */}
-                      <div className="absolute top-full left-0 mt-1 w-48 bg-slate-800 border border-gray-600 rounded-lg shadow-xl hidden group-hover:block z-50">
-                          {rooms.map(r => (
-                              <button key={r.id} onClick={() => switchToRoom(r)} className="w-full text-left px-3 py-2 text-sm hover:bg-white/5 flex items-center gap-2 text-gray-300">
-                                  <Hash size={12} /> {r.name} {activeRoomId === r.id && <Check size={12} className="ml-auto text-green-400" />}
-                              </button>
-                          ))}
-                          {isModerator(currentUser) && <button onClick={createDefaultRoom} className="w-full text-left px-3 py-2 text-sm hover:bg-white/5 text-gray-400 border-t border-gray-700"><Plus size={12} className="inline mr-1"/> New Room</button>}
+
+                      {/* Dropdown Menu */}
+                      <div className="absolute top-full left-0 mt-3 w-72 bg-slate-900/95 backdrop-blur-xl border border-gray-700/80 rounded-2xl shadow-2xl hidden group-hover:block animate-in fade-in slide-in-from-top-4 duration-200 overflow-hidden ring-1 ring-white/10 origin-top-left">
+                          <div className="px-5 py-3 bg-slate-950/80 border-b border-gray-800 flex justify-between items-center">
+                              <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Available Channels</h3>
+                              <span className="text-[10px] bg-slate-800 text-gray-500 px-1.5 py-0.5 rounded border border-slate-700">{rooms.length}</span>
+                          </div>
+                          
+                          <div className="max-h-[320px] overflow-y-auto custom-scrollbar p-2 space-y-1">
+                              {rooms.map(r => {
+                                  const isActive = activeRoomId === r.id;
+                                  return (
+                                      <button 
+                                          key={r.id} 
+                                          onClick={() => { switchToRoom(r); }} 
+                                          className={`w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-center gap-3 group/item relative overflow-hidden
+                                              ${isActive 
+                                                  ? 'bg-gradient-to-r from-mirc-pink/20 to-purple-500/10 border border-mirc-pink/30' 
+                                                  : 'hover:bg-white/5 border border-transparent hover:border-white/5'}
+                                          `}
+                                      >
+                                          <div className={`p-2 rounded-lg shrink-0 transition-colors ${isActive ? 'bg-mirc-pink text-white shadow-lg shadow-pink-500/30' : 'bg-slate-800 text-gray-500 group-hover/item:text-gray-300'}`}>
+                                              {r.isMuted ? <LockKeyhole size={16}/> : <Hash size={16} />}
+                                          </div>
+                                          <div className="flex-1 min-w-0 z-10">
+                                              <div className={`font-bold text-sm truncate ${isActive ? 'text-pink-100' : 'text-gray-300 group-hover/item:text-white'}`}>
+                                                  {r.name}
+                                              </div>
+                                              <div className="text-xs text-gray-600 truncate group-hover/item:text-gray-500 font-mono">
+                                                  {r.topic || 'No topic set'}
+                                              </div>
+                                          </div>
+                                          {isActive && <div className="absolute right-3 w-2 h-2 rounded-full bg-mirc-pink animate-pulse shadow-[0_0_8px_#f472b6]" />}
+                                      </button>
+                                  )
+                              })}
+                          </div>
+
+                          {isModerator(currentUser) && (
+                              <div className="p-3 border-t border-gray-800 bg-slate-950/50">
+                                  <button 
+                                      onClick={createDefaultRoom} 
+                                      className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-dashed border-gray-700 text-gray-500 hover:text-mirc-cyan hover:border-mirc-cyan/50 hover:bg-mirc-cyan/5 transition-all text-xs font-bold uppercase tracking-wide"
+                                  >
+                                      <Plus size={14} /> Create New Room
+                                  </button>
+                              </div>
+                          )}
                       </div>
                    </div>
               </div>
