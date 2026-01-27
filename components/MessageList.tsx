@@ -13,8 +13,6 @@ interface MessageListProps {
 const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersMap, isPrivate = false }) => {
   const { pb } = useMIRCContext();
   const scrollRef = useRef<HTMLDivElement>(null);
-  
-  // Lightbox State
   const [viewingImage, setViewingImage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -26,8 +24,17 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
   const formatContent = (text: string) => {
     if (!text) return null;
     
-    // Simple parser for styling
-    let contentElements: React.ReactNode[] = [text];
+    // Check for color tag
+    const colorMatch = text.match(/^\/\/color\s+(#[0-9a-fA-F]{3,6})\s+(.*)/);
+    let baseColor: string | undefined = undefined;
+    let processText = text;
+
+    if (colorMatch) {
+        baseColor = colorMatch[1];
+        processText = colorMatch[2];
+    }
+
+    let contentElements: React.ReactNode[] = [processText];
 
     const replaceWithTag = (
         nodes: React.ReactNode[], 
@@ -40,8 +47,8 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
                 newNodes.push(node);
                 return;
             }
-            const splitParts = node.split(regex);
-            splitParts.forEach((part, idx) => {
+            const parts = node.split(regex);
+            parts.forEach((part, idx) => {
                  if (regex.test(part)) {
                      newNodes.push(wrapper(part, idx));
                  } else if (part !== "") {
@@ -52,26 +59,18 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
         return newNodes;
     };
 
-    // Color
-    const colorMatch = text.match(/^\/\/color\s+(#[0-9a-fA-F]{3,6})\s+(.*)/);
-    let baseColor: string | undefined = undefined;
-    let processText = text;
-
-    if (colorMatch) {
-        baseColor = colorMatch[1];
-        processText = colorMatch[2];
-        contentElements = [processText];
-    }
-
-    // Bold, Italic, Underline
-    contentElements = replaceWithTag(contentElements, /(\*[^\*]+\*)/g, (match, i) => (
-        <span key={`b-${i}`} className="font-bold">{match.slice(1, -1)}</span>
+    // Robust Formatting:
+    // Bold: **text**
+    contentElements = replaceWithTag(contentElements, /(\*\*[^\*]+\*\*)/g, (match, i) => (
+        <span key={`b-${i}`} className="font-bold">{match.slice(2, -2)}</span>
     ));
-    contentElements = replaceWithTag(contentElements, /(_[^_]+_)/g, (match, i) => (
+    // Italic: *text* (must not be double star)
+    contentElements = replaceWithTag(contentElements, /(\*[^\*]+\*)/g, (match, i) => (
         <span key={`i-${i}`} className="italic">{match.slice(1, -1)}</span>
     ));
-    contentElements = replaceWithTag(contentElements, /(~[^~]+~)/g, (match, i) => (
-        <span key={`u-${i}`} className="underline">{match.slice(1, -1)}</span>
+    // Underline: __text__
+    contentElements = replaceWithTag(contentElements, /(__[^_]+__)/g, (match, i) => (
+        <span key={`u-${i}`} className="underline">{match.slice(2, -2)}</span>
     ));
 
     return <span style={{ color: baseColor }}>{contentElements}</span>;
@@ -89,8 +88,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
                 isMe = msg.sender === currentUser?.id;
                 // @ts-ignore
                 const userId = isMe ? msg.sender : msg.sender;
-                user = usersMap.get(userId);
-                if (isMe && !user) user = currentUser!;
+                user = usersMap.get(userId) || (isMe ? (currentUser as User) : undefined);
             } else {
                 // @ts-ignore
                 user = msg.expand?.user || usersMap.get(msg.user);
@@ -100,8 +98,6 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
 
             const isBot = user?.role === 'bot';
             const isAction = msg.text?.startsWith('/me');
-
-            // Generate proper File URL using PB helper
             const fileUrl = msg.attachment ? pb.files.getUrl(msg, msg.attachment) : null;
 
             return (
@@ -119,7 +115,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
                 <div className={`flex flex-col max-w-[85%] md:max-w-[80%] ${isMe ? 'items-end' : 'items-start'}`}>
                 {!isAction && (
                         <span className={`text-[10px] md:text-xs font-bold mb-0.5 ${isBot ? 'text-mirc-pink' : (isMe ? 'text-green-400' : 'text-mirc-cyan')}`}>
-                            {user?.username || 'Unknown'} 
+                            {user?.username || 'Bilinmiyor'} 
                             {isBot && <span className="ml-1 text-[9px] bg-mirc-pink text-white px-1 rounded">BOT</span>}
                             <span className="text-[9px] text-gray-600 font-normal ml-2">{new Date(msg.created).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                         </span>
@@ -140,28 +136,17 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
                     {fileUrl ? (
                         <div className="mt-1">
                              {msg.type === 'audio' ? (
-                                <div className="flex flex-col gap-1">
-                                    <span className="text-[10px] uppercase font-bold opacity-70">Voice Message</span>
-                                    <audio controls src={fileUrl} className="h-8 w-full max-w-[200px]" />
-                                </div>
+                                <audio controls src={fileUrl} className="h-8 w-full max-w-[200px]" />
                              ) : msg.type === 'image' ? (
                                 <div className="relative group/img cursor-pointer" onClick={() => setViewingImage(fileUrl)}>
-                                    <img 
-                                        src={fileUrl} 
-                                        alt="attachment" 
-                                        className="max-w-full rounded-md max-h-48 md:max-h-60 object-contain bg-black/20" 
-                                        loading="lazy"
-                                    />
+                                    <img src={fileUrl} alt="attachment" className="max-w-full rounded-md max-h-48 md:max-h-60 object-contain bg-black/20" loading="lazy" />
                                     <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/20 transition-colors flex items-center justify-center opacity-0 group-hover/img:opacity-100">
                                         <ZoomIn className="text-white drop-shadow-md" />
                                     </div>
                                 </div>
                              ) : (
-                                <a href={fileUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-blue-400 hover:text-blue-300 underline p-2 bg-black/20 rounded">
-                                    📎 Download Attachment
-                                </a>
+                                <a href={fileUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-blue-400 hover:text-blue-300 underline p-2 bg-black/20 rounded">📎 Dosyayı İndir</a>
                              )}
-                             {/* Show text caption if it's not just the default placeholder */}
                              {msg.text && msg.text !== 'Image' && msg.text !== 'Voice Message' && (
                                  <div className="mt-2 pt-2 border-t border-white/10">{formatContent(msg.text)}</div>
                              )}
@@ -176,17 +161,10 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
         })}
         </div>
 
-        {/* Lightbox Modal */}
         {viewingImage && (
             <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setViewingImage(null)}>
-                <button className="absolute top-4 right-4 text-white hover:text-red-500 p-2 bg-black/50 rounded-full" onClick={() => setViewingImage(null)}>
-                    <X size={32} />
-                </button>
-                <img 
-                    src={viewingImage} 
-                    className="max-w-full max-h-full object-contain rounded shadow-2xl" 
-                    onClick={(e) => e.stopPropagation()} 
-                />
+                <button className="absolute top-4 right-4 text-white hover:text-red-500 p-2 bg-black/50 rounded-full" onClick={() => setViewingImage(null)}><X size={32} /></button>
+                <img src={viewingImage} className="max-w-full max-h-full object-contain rounded shadow-2xl" onClick={(e) => e.stopPropagation()} />
             </div>
         )}
     </>

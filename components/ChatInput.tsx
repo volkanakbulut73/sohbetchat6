@@ -8,7 +8,6 @@ interface ChatInputProps {
   isLocked?: boolean;
 }
 
-// Popular Emojis List
 const EMOJIS = [
     "😀", "😂", "🥰", "😎", "🤔", "😭", "🤯", "🥳", "👻", "👽", "🤖", "💩",
     "👍", "👎", "👋", "🙏", "💪", "🫶", "🔥", "✨", "❤️", "💔", "💯", "⚠️",
@@ -27,11 +26,8 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  
-  // Track where the cursor should be after a render
   const cursorTarget = useRef<number | null>(null);
 
-  // Apply cursor position after text update
   useEffect(() => {
       if (cursorTarget.current !== null && textareaRef.current) {
           textareaRef.current.setSelectionRange(cursorTarget.current, cursorTarget.current);
@@ -45,14 +41,13 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
     if (!text.trim()) return;
 
     let finalMsg = text;
-    const isCommand = text.startsWith('/') && !text.startsWith('/me');
-
-    if (selectedColor && !isCommand) {
+    if (selectedColor && !text.startsWith('/')) {
         finalMsg = `//color ${selectedColor} ${text}`;
     }
 
     onSendMessage(finalMsg);
     setText('');
+    setSelectedColor(null);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -72,20 +67,15 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
       const before = text.substring(0, start);
       const after = text.substring(end);
 
-      let newText = "";
       if (selectedText.length > 0) {
-          // Wrap selection: *bold*
-          newText = `${before}${tag}${selectedText}${tag}${after}`;
-          // Put cursor after the closing tag
+          const newText = `${before}${tag}${selectedText}${tag}${after}`;
+          setText(newText);
           cursorTarget.current = start + tag.length + selectedText.length + tag.length;
       } else {
-          // Just insert tags: **
-          newText = `${before}${tag}${tag}${after}`;
-          // Put cursor BETWEEN the tags
+          const newText = `${before}${tag}${tag}${after}`;
+          setText(newText);
           cursorTarget.current = start + tag.length;
       }
-      
-      setText(newText);
   };
 
   const handleEmojiClick = (emoji: string) => {
@@ -94,18 +84,11 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
            setText(prev => prev + emoji);
            return;
       }
-
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
-      const before = text.substring(0, start);
-      const after = text.substring(end);
-      
-      const newText = `${before}${emoji}${after}`;
+      const newText = `${text.substring(0, start)}${emoji}${text.substring(end)}`;
       setText(newText);
-      
-      // Cursor after emoji
       cursorTarget.current = start + emoji.length;
-      
       setShowEmojiPicker(false);
   };
 
@@ -122,25 +105,15 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
           const recorder = new MediaRecorder(stream);
           mediaRecorderRef.current = recorder;
           audioChunksRef.current = [];
-
-          recorder.ondataavailable = (e) => {
-              if (e.data.size > 0) audioChunksRef.current.push(e.data);
-          };
-
+          recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
           recorder.onstop = () => {
-              const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-              const audioFile = new File([audioBlob], "voice-message.webm", { type: 'audio/webm' });
+              const audioFile = new File([new Blob(audioChunksRef.current, { type: 'audio/webm' })], "voice.webm", { type: 'audio/webm' });
               onSendMessage('', audioFile);
-              
-              // Stop tracks
               stream.getTracks().forEach(track => track.stop());
           };
-
           recorder.start();
           setIsRecording(true);
-      } catch (err) {
-          alert("Microphone access denied or error occurred.");
-      }
+      } catch (err) { alert("Mikrofon erişimi reddedildi."); }
   };
 
   const stopRecording = () => {
@@ -150,58 +123,48 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
       }
   };
 
-  const handleColorSelect = (colorHex: string | null) => {
-    setSelectedColor(colorHex);
-    setShowColorPicker(false);
-  };
-
   const presetColors = [
-      { hex: '#ef4444', tw: 'bg-red-500' },    // Red
-      { hex: '#facc15', tw: 'bg-yellow-400' }, // Yellow
-      { hex: '#4ade80', tw: 'bg-green-400' },  // Mirc Green
-      { hex: '#22d3ee', tw: 'bg-cyan-400' },   // Mirc Cyan
-      { hex: '#f472b6', tw: 'bg-pink-400' },   // Mirc Pink
-      { hex: '#c084fc', tw: 'bg-purple-400' }, // Mirc Purple
+      { hex: '#ef4444', tw: 'bg-red-500' },
+      { hex: '#facc15', tw: 'bg-yellow-400' },
+      { hex: '#4ade80', tw: 'bg-green-400' },
+      { hex: '#22d3ee', tw: 'bg-cyan-400' },
+      { hex: '#f472b6', tw: 'bg-pink-400' },
+      { hex: '#c084fc', tw: 'bg-purple-400' },
   ];
 
   return (
     <div className="flex flex-col bg-slate-900/95 backdrop-blur-sm border-t border-gray-700 relative z-20 shrink-0">
-      
-      {/* Formatting Toolbar */}
       {!disabled && (
-          // CHANGED: Removed overflow-x-auto, added flex-wrap to prevent clipping of absolute children (popups)
           <div className="flex items-center px-2 py-1 bg-slate-950/50 border-b border-gray-800 gap-1 flex-wrap">
-             <button type="button" onClick={() => insertTag('*')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" title="Bold"><Bold size={14} /></button>
-             <button type="button" onClick={() => insertTag('_')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" title="Italic"><Italic size={14} /></button>
-             <button type="button" onClick={() => insertTag('~')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" title="Underline"><Underline size={14} /></button>
+             {/* Formatting Buttons with visible identifiers */}
+             <button type="button" onClick={() => insertTag('**')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10 flex items-center gap-0.5" title="Kalın">
+                <Bold size={14} /><span className="text-[10px] font-bold opacity-50">B</span>
+             </button>
+             <button type="button" onClick={() => insertTag('*')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10 flex items-center gap-0.5" title="İtalik">
+                <Italic size={14} /><span className="text-[10px] font-bold opacity-50">I</span>
+             </button>
+             <button type="button" onClick={() => insertTag('__')} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10 flex items-center gap-0.5" title="Altı Çizili">
+                <Underline size={14} /><span className="text-[10px] font-bold opacity-50">U</span>
+             </button>
              
              <div className="w-px h-4 bg-gray-700 mx-1" />
              
              <div className="relative">
-                <button 
-                    type="button"
-                    onClick={() => setShowColorPicker(!showColorPicker)} 
-                    className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10"
-                    style={{ color: selectedColor || undefined }}
-                >
+                <button type="button" onClick={() => setShowColorPicker(!showColorPicker)} className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-white/10" style={{ color: selectedColor || undefined }}>
                     <Palette size={14} />
                 </button>
                 {showColorPicker && (
                     <div className="absolute bottom-full left-0 mb-2 p-2 bg-slate-800 border border-slate-600 rounded-lg shadow-xl flex gap-2 z-50 animate-in fade-in slide-in-from-bottom-2">
-                        <button type="button" onClick={() => handleColorSelect(null)} className="w-5 h-5 rounded-full border border-gray-500 flex items-center justify-center bg-transparent"><X size={10} /></button>
+                        <button type="button" onClick={() => {setSelectedColor(null); setShowColorPicker(false);}} className="w-5 h-5 rounded-full border border-gray-500 flex items-center justify-center bg-transparent"><X size={10} /></button>
                         {presetColors.map(c => (
-                            <button type="button" key={c.hex} onClick={() => handleColorSelect(c.hex)} className={`w-5 h-5 rounded-full border border-gray-600 hover:scale-110 transition-transform ${c.tw}`} />
+                            <button type="button" key={c.hex} onClick={() => {setSelectedColor(c.hex); setShowColorPicker(false);}} className={`w-5 h-5 rounded-full border border-gray-600 hover:scale-110 transition-transform ${c.tw}`} />
                         ))}
                     </div>
                 )}
              </div>
 
              <div className="relative">
-                <button 
-                    type="button"
-                    onClick={() => setShowEmojiPicker(!showEmojiPicker)} 
-                    className={`p-1.5 rounded hover:bg-white/10 ${showEmojiPicker ? 'text-yellow-400' : 'text-gray-400 hover:text-white'}`}
-                >
+                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className={`p-1.5 rounded hover:bg-white/10 ${showEmojiPicker ? 'text-yellow-400' : 'text-gray-400 hover:text-white'}`}>
                     <Smile size={14} />
                 </button>
                 {showEmojiPicker && (
@@ -219,67 +182,34 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, allowAtt
                  <>
                     {isRecording ? (
                         <button type="button" onClick={stopRecording} className="flex items-center gap-2 px-2 py-0.5 bg-red-600 text-white rounded animate-pulse">
-                            <Square size={12} fill="white" /> <span className="text-xs font-bold">REC</span>
+                            <Square size={12} fill="white" /> <span className="text-xs font-bold">DUR</span>
                         </button>
                     ) : (
-                        <button type="button" onClick={startRecording} className="p-1.5 text-red-400 hover:text-red-300 rounded hover:bg-white/10" title="Voice Message">
-                            <Mic size={14} />
-                        </button>
+                        <button type="button" onClick={startRecording} className="p-1.5 text-red-400 hover:text-red-300 rounded hover:bg-white/10" title="Sesli Mesaj"><Mic size={14} /></button>
                     )}
-                    
-                    <button type="button" onClick={() => fileInputRef.current?.click()} className="p-1.5 text-mirc-cyan hover:text-cyan-300 rounded hover:bg-white/10" title="Image">
-                        <ImageIcon size={14} />
-                    </button>
+                    <button type="button" onClick={() => fileInputRef.current?.click()} className="p-1.5 text-mirc-cyan hover:text-cyan-300 rounded hover:bg-white/10" title="Resim Gönder"><ImageIcon size={14} /></button>
                  </>
              )}
           </div>
       )}
 
-      {/* Input Area */}
-      <div className={`
-        flex items-end gap-2 p-2 transition-all
-        ${disabled 
-            ? 'bg-slate-900 opacity-80 cursor-not-allowed' 
-            : 'bg-slate-800'}
-      `}>
-        <input 
-            type="file" 
-            ref={fileInputRef} 
-            className="hidden" 
-            accept="image/*"
-            onChange={handleFileSelect}
-        />
-        
-        {isLocked && disabled && (
-             <div className="p-2 text-red-400">
-                <Lock size={18} />
-             </div>
-        )}
-
+      <div className={`flex items-end gap-2 p-2 transition-all ${disabled ? 'bg-slate-900 opacity-80 cursor-not-allowed' : 'bg-slate-800'}`}>
+        <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileSelect} />
+        {isLocked && disabled && <div className="p-2 text-red-400"><Lock size={18} /></div>}
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          placeholder={disabled ? "Channel is muted (Admins only)" : "Type your message..."}
+          placeholder={disabled ? "Kanal susturuldu..." : "Mesajınızı yazın..."}
           style={{ color: selectedColor || undefined }}
-          className={`
-            flex-1 bg-transparent border-none outline-none resize-none max-h-24 md:max-h-32 min-h-[40px] py-2 font-mono text-sm
-            ${disabled ? 'text-gray-500' : 'placeholder-gray-600'}
-            ${!selectedColor && !disabled ? 'text-gray-200' : ''}
-          `}
+          className={`flex-1 bg-transparent border-none outline-none resize-none max-h-24 md:max-h-32 min-h-[40px] py-2 font-mono text-sm ${disabled ? 'text-gray-500' : 'placeholder-gray-600 text-gray-200'}`}
           rows={1}
         />
-
         {!disabled && (
-            <button
-            type="button"
-            onClick={() => handleSubmit()}
-            disabled={!text.trim()}
-            className="p-2 bg-mirc-pink text-white rounded-lg hover:bg-pink-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform active:scale-95 mb-1"
-            >
-            <Send size={18} />
+            <button type="button" onClick={() => handleSubmit()} disabled={!text.trim()} className="p-2 bg-mirc-pink text-white rounded-lg hover:bg-pink-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform active:scale-95 mb-1">
+                <Send size={18} />
             </button>
         )}
       </div>

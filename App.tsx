@@ -23,74 +23,79 @@ type ViewState =
 const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
   const pb = useMemo(() => createPocketBaseClient(pocketbaseUrl), [pocketbaseUrl]);
 
-  // --- State ---
+  // --- Core State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
-  
-  // VIEW MANAGEMENT
   const [currentView, setCurrentView] = useState<ViewState>({ type: 'room', id: '' });
-  
-  // Track the *last active room* so when we close a PM or switch back, we go there
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
 
-  // Messages
+  // --- Message State ---
   const [dbMessages, setDbMessages] = useState<Message[]>([]);
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
+  const [privateMessages, setPrivateMessages] = useState<Record<string, PrivateMessage[]>>({});
   
+  // --- User State ---
   const [users, setUsers] = useState<User[]>([]);
   const [usersMap, setUsersMap] = useState<Map<string, User>>(new Map());
+  const [activePMs, setActivePMs] = useState<User[]>([]);
+  const [unreadPMs, setUnreadPMs] = useState<Set<string>>(new Set());
+
+  // --- UI Control State ---
   const [showMobileUserList, setShowMobileUserList] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [permissionError, setPermissionError] = useState(false);
   const [realtimeError, setRealtimeError] = useState(false);
-  const [pmError, setPmError] = useState(false); // Track PM permission errors
+  const [pmError, setPmError] = useState(false);
+  const [showRoomDropdown, setShowRoomDropdown] = useState(false);
+  const [showTabOverflow, setShowTabOverflow] = useState(false);
   
-  // Login & Register
+  // --- Auth State ---
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState(''); 
-  
   const [hasApiKey, setHasApiKey] = useState(false);
   const [showKeySelector, setShowKeySelector] = useState(false);
-  
-  // Active Private Chats (Open Tabs)
-  const [activePMs, setActivePMs] = useState<User[]>([]);
-  const [privateMessages, setPrivateMessages] = useState<Record<string, PrivateMessage[]>>({});
-  const [unreadPMs, setUnreadPMs] = useState<Set<string>>(new Set());
-
-  // Show "More" dropdown for tabs
-  const [showTabOverflow, setShowTabOverflow] = useState(false);
 
   // --- Refs ---
+  const roomDropdownRef = useRef<HTMLDivElement>(null);
   const usersMapRef = useRef(usersMap);
   const currentUserRef = useRef(currentUser);
   const activePMsRef = useRef(activePMs);
   const currentViewRef = useRef(currentView);
-  const usersRef = useRef(users);
 
   useEffect(() => { usersMapRef.current = usersMap; }, [usersMap]);
   useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
   useEffect(() => { activePMsRef.current = activePMs; }, [activePMs]);
   useEffect(() => { currentViewRef.current = currentView; }, [currentView]);
-  useEffect(() => { usersRef.current = users; }, [users]);
+
+  // Click Outside Room Dropdown Logic
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (roomDropdownRef.current && !roomDropdownRef.current.contains(event.target as Node)) {
+        setShowRoomDropdown(false);
+      }
+    };
+    if (showRoomDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showRoomDropdown]);
 
   // --- Helpers ---
   const isModerator = (user: User | null) => user?.role === UserRole.ADMIN || user?.role === UserRole.OPERATOR;
   const isAdmin = (user: User | null) => user?.role === UserRole.ADMIN;
 
-  // Get current Room object easily
   const currentRoomObj = useMemo(() => 
     rooms.find(r => r.id === activeRoomId) || null
   , [rooms, activeRoomId]);
 
-  // Combine DB and Local messages for PUBLIC chat
   const allPublicMessages = useMemo(() => {
       const combined = [...dbMessages, ...localMessages];
       return combined.sort((a, b) => new Date(a.created).getTime() - new Date(b.created).getTime());
   }, [dbMessages, localMessages]);
 
-  // --- API Key Check ---
+  // --- Gemini API Key Check ---
   useEffect(() => {
     const checkKey = async () => {
         const key = getApiKey();
@@ -107,7 +112,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
                     setHasApiKey(true);
                     setShowKeySelector(false);
                 }
-            } catch (e) { console.log("Error checking AI Studio key", e); }
+            } catch (e) { console.warn("AI Studio key check failed", e); }
         }
     };
     checkKey();
@@ -115,7 +120,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
 
   const handleSelectKey = async () => {
       const win = window as any;
-      if (win.aistudio) {
+      if (win.aistudio && win.aistudio.openSelectKey) {
           try {
               await win.aistudio.openSelectKey();
               setHasApiKey(true); 
@@ -126,11 +131,11 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       }
   };
 
-  // --- 1. Fetch Users (Initial & Poll) ---
+  // --- Data Fetching ---
   const fetchUsers = useCallback(async () => {
     if (!pb.authStore.isValid) return;
 
-    const bot: User = { 
+    const botUser: User = { 
         id: 'bot_ai', 
         username: BOT_NAME, 
         role: UserRole.BOT, 
@@ -142,96 +147,34 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     
     let fetchedUsers: User[] = [];
     try {
-        fetchedUsers = await pb.collection('users').getFullList<User>({ 
-            sort: 'username', 
-            requestKey: null,
-            headers: { 'x-no-cache': 'true' }
-        });
+        fetchedUsers = await pb.collection('users').getFullList<User>({ sort: 'username', requestKey: null });
     } catch(e) { console.error("Fetch users error", e); }
 
-    // NOTE: We do NOT force 'isOnline: true' for ourselves locally anymore.
-    // We rely on the actual data to ensure our heartbeat logic is working.
-    // If we look offline to ourselves, it means our heartbeat failed.
     const processedUsers = [...fetchedUsers];
-
-    // Ensure 'Me' exists in the list even if DB hasn't synced (just for initial load safety)
-    if (pb.authStore.isValid && pb.authStore.model) {
+    if (pb.authStore.model) {
         const myId = pb.authStore.model.id;
         if (!processedUsers.find(u => u.id === myId)) {
-            const me: User = {
+            processedUsers.push({
                 id: myId,
                 username: pb.authStore.model.username,
                 role: (pb.authStore.model.role as UserRole) || UserRole.USER,
-                isOnline: true, // Optimistic initial state only
+                isOnline: true,
                 created: pb.authStore.model.created,
-                updated: new Date().toISOString() // Fresh timestamp
-            };
-            processedUsers.push(me);
+                updated: new Date().toISOString()
+            } as User);
         }
     }
 
-    const realUsers = processedUsers.filter(u => u.id !== 'bot_ai');
-    const allUsers = [...realUsers, bot];
-    
+    const allUsers = [...processedUsers.filter(u => u.id !== 'bot_ai'), botUser];
     setUsers(allUsers);
     setUsersMap(new Map(allUsers.map(u => [u.id, u])));
   }, [pb]);
 
-
-  // --- 2. Realtime User Subscription ---
-  useEffect(() => {
-      if (!currentUser) return;
-
-      const subscribeToUsers = async () => {
-          try {
-            await pb.collection('users').subscribe('*', (e) => {
-                const record = e.record as unknown as User;
-                const action = e.action; // create, update, delete
-
-                setUsers(currentList => {
-                    const bot = currentList.find(u => u.id === 'bot_ai');
-                    const realUsers = currentList.filter(u => u.id !== 'bot_ai');
-                    
-                    let newList = [...realUsers];
-                    const existingIndex = newList.findIndex(u => u.id === record.id);
-
-                    if (action === 'delete') {
-                        if (existingIndex !== -1) newList.splice(existingIndex, 1);
-                    } else if (action === 'create') {
-                        if (existingIndex === -1) newList.push(record);
-                    } else if (action === 'update') {
-                        if (existingIndex !== -1) {
-                            newList[existingIndex] = record;
-                        } else {
-                            newList.push(record);
-                        }
-                    }
-
-                    if (bot) newList.push(bot);
-                    setUsersMap(new Map(newList.map(u => [u.id, u])));
-                    return newList;
-                });
-            });
-          } catch (err) {
-              console.error("Realtime user sub failed", err);
-          }
-      };
-
-      subscribeToUsers();
-      return () => { pb.collection('users').unsubscribe('*').catch(()=>{}); };
-  }, [currentUser, pb]);
-
-
-  // --- 3. Heartbeat & Visibility Logic (IMPROVED) ---
+  // Heartbeat
   useEffect(() => {
     if (!currentUser) return;
-    
-    // The heartbeat updates the record. PocketBase auto-updates the 'updated' timestamp.
     const sendHeartbeat = async () => {
-        // If tab is hidden, we might skip or reduce frequency, 
-        // but here we just check permission errors.
-        if (document.hidden) return; 
-
+        if (document.hidden) return;
         try { 
             await pb.collection('users').update(currentUser.id, { isOnline: true }); 
             setPermissionError(false);
@@ -239,42 +182,19 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             if (e.status === 403 || e.status === 404) setPermissionError(true);
         }
     };
-
-    // 1. Send immediately on mount
-    sendHeartbeat();
-
-    // 2. Interval (every 30 seconds is enough for "3 minute" logic)
     const intervalId = setInterval(sendHeartbeat, 30000); 
-
-    // 3. Handle Visibility Change (User comes back to tab)
-    const handleVisibility = () => {
-        if (!document.hidden) {
-            // User returned! Beat immediately to show online
-            sendHeartbeat();
-            // And refresh the list to see others
-            fetchUsers();
-        }
-    };
-
+    const handleVisibility = () => { if (!document.hidden) { sendHeartbeat(); fetchUsers(); } };
     document.addEventListener("visibilitychange", handleVisibility);
-
-    return () => {
-        clearInterval(intervalId);
-        document.removeEventListener("visibilitychange", handleVisibility);
-    };
+    return () => { clearInterval(intervalId); document.removeEventListener("visibilitychange", handleVisibility); };
   }, [currentUser, pb, fetchUsers]);
 
-  // --- Initial Load ---
+  // Initial Data
   useEffect(() => {
     const init = async () => {
       if (pb.authStore.isValid && pb.authStore.model) {
         try {
             const freshMe = await pb.collection('users').getOne(pb.authStore.model.id);
-            if (freshMe.banned) {
-                alert("You are banned.");
-                pb.authStore.clear();
-                return;
-            }
+            if (freshMe.banned) { pb.authStore.clear(); return; }
             setCurrentUser({ ...freshMe, role: freshMe.role as UserRole, isOnline: true } as User);
         } catch (e) { pb.authStore.clear(); }
       }
@@ -282,7 +202,7 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
     init();
   }, [pb]);
 
-  // --- Load Rooms ---
+  // Rooms
   useEffect(() => {
       if (!currentUser) return;
       const loadRooms = async () => {
@@ -290,27 +210,17 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             const roomsList = await pb.collection('rooms').getFullList<Room>({ sort: 'created' });
             setRooms(roomsList);
             if (roomsList.length > 0) {
-                const firstRoom = roomsList[0];
-                setActiveRoomId(firstRoom.id);
-                setCurrentView({ type: 'room', id: firstRoom.id });
-            } else if (pb.authStore.isValid) {
-                // Auto create default
-                try {
-                    const newRoom = await pb.collection('rooms').create({ name: 'General', topic: 'Lobby', isMuted: false });
-                    setRooms([newRoom as unknown as Room]);
-                    setActiveRoomId(newRoom.id);
-                    setCurrentView({ type: 'room', id: newRoom.id });
-                } catch (err) {}
+                setActiveRoomId(roomsList[0].id);
+                setCurrentView({ type: 'room', id: roomsList[0].id });
             }
         } catch (e) { console.error("Error fetching rooms", e); }
       };
       loadRooms();
   }, [pb, currentUser]);
 
-  // --- Public Message Subscription ---
+  // Realtime Subscriptions
   useEffect(() => {
     if (!activeRoomId || !currentUser) return;
-    
     const fetchMessages = async () => {
       try {
           const msgs = await pb.collection('messages').getList<Message>(1, 50, {
@@ -321,97 +231,27 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
           setDbMessages(msgs.items.reverse());
       } catch (e) { }
     };
-    
     setLocalMessages([]);
-    setDbMessages([]);
     fetchMessages();
-
     const initSub = async () => {
         try {
-            await pb.collection('messages').subscribe('*', function (e) {
+            await pb.collection('messages').subscribe('*', (e) => {
                 setRealtimeError(false);
                 if (e.action === 'create' && e.record.room === activeRoomId) {
                     const newMsg = e.record as unknown as Message;
                     if (!newMsg.expand?.user && newMsg.user) {
                         newMsg.expand = { user: usersMapRef.current.get(newMsg.user) };
                     }
-                    setDbMessages((prev) => {
-                        if (prev.find(m => m.id === newMsg.id)) return prev;
-                        return [...prev, newMsg];
-                    });
+                    setDbMessages(prev => prev.find(m => m.id === newMsg.id) ? prev : [...prev, newMsg]);
                 }
             });
         } catch (err) { setRealtimeError(true); }
     };
     initSub();
-
     return () => { pb.collection('messages').unsubscribe('*').catch(()=>{}); };
-  }, [activeRoomId, pb]);
+  }, [activeRoomId, pb, currentUser]);
 
-  // --- Private Message Subscription ---
-  useEffect(() => {
-      if (!currentUser) return;
-
-      const initPMSub = async () => {
-          try {
-              const recents = await pb.collection('private_messages').getList<PrivateMessage>(1, 200, {
-                  filter: `sender="${currentUser.id}" || recipient="${currentUser.id}"`,
-                  sort: 'created' 
-              });
-              
-              setPmError(false);
-              
-              const pmMap: Record<string, PrivateMessage[]> = {};
-              
-              recents.items.forEach(pm => {
-                  const otherId = pm.sender === currentUser.id ? pm.recipient : pm.sender;
-                  if (!pmMap[otherId]) pmMap[otherId] = [];
-                  pmMap[otherId].push(pm);
-              });
-              setPrivateMessages(pmMap);
-
-              await pb.collection('private_messages').subscribe('*', (e) => {
-                  if (e.action === 'create') {
-                      const pm = e.record as unknown as PrivateMessage;
-                      const myId = currentUserRef.current?.id;
-                      
-                      if (pm.recipient === myId || pm.sender === myId) {
-                          const otherUserId = pm.sender === myId ? pm.recipient : pm.sender;
-                          const otherUser = usersMapRef.current.get(otherUserId);
-                          
-                          if (otherUser) {
-                              setPrivateMessages(prev => ({
-                                  ...prev,
-                                  [otherUserId]: [...(prev[otherUserId] || []), pm]
-                              }));
-
-                              if (pm.recipient === myId) {
-                                  const isActive = activePMsRef.current.some(u => u.id === otherUserId);
-                                  if (!isActive) {
-                                      setActivePMs(prev => [...prev, otherUser]);
-                                  }
-                                  
-                                  const currentV = currentViewRef.current;
-                                  if (currentV.type !== 'pm' || currentV.userId !== otherUserId) {
-                                      setUnreadPMs(prev => new Set(prev).add(otherUserId));
-                                  }
-                              }
-                          }
-                      }
-                  }
-              });
-          } catch (err: any) { 
-              if (err.status === 403) {
-                  setPmError(true);
-              }
-          }
-      };
-      initPMSub();
-      return () => { pb.collection('private_messages').unsubscribe('*').catch(()=>{}); }
-  }, [currentUser, pb]);
-
-  // --- Handlers ---
-
+  // --- Auth Handlers ---
   const handleAuth = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!email || !password || (authMode === 'register' && !username)) return;
@@ -426,7 +266,6 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
             if (model.banned) { alert("Banned."); pb.authStore.clear(); setIsLoading(false); return; }
             await pb.collection('users').update(model.id, { isOnline: true });
             setCurrentUser({ id: model.id, username: model.username, role: model.role as UserRole, isOnline: true, created: model.created, updated: model.updated, avatar: model.avatar ? pb.files.getUrl(model, model.avatar) : undefined });
-            setPassword('');
         }
     } catch (e: any) { alert("Auth error: " + e.message); } finally { setIsLoading(false); }
   };
@@ -436,98 +275,56 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       pb.authStore.clear();
       setCurrentUser(null);
       setCurrentView({ type: 'room', id: '' });
-      setDbMessages([]);
-      setActivePMs([]);
-      setPrivateMessages({});
-      setPmError(false);
   };
 
   const handleSendMessage = async (text: string, file?: File) => {
     if (!currentUser) return;
     
-    // ROUTE MESSAGE BASED ON VIEW
     if (currentView.type === 'room') {
         if (!activeRoomId) return;
         if (currentRoomObj?.isMuted && !isModerator(currentUser)) { alert("Room locked."); return; }
-
         try {
-            // Upload attachment if present
-            let attachmentId = undefined;
             if (file) {
-                 const formData = new FormData();
-                 formData.append('attachment', file);
-                 // We create message via formData to include file
-                 formData.append('text', text || (file.type.startsWith('audio') ? 'Voice Message' : 'Image'));
-                 formData.append('user', currentUser.id);
-                 formData.append('room', activeRoomId);
-                 formData.append('type', file.type.startsWith('audio') ? 'audio' : 'image');
-                 await pb.collection('messages').create(formData);
+                 const fd = new FormData();
+                 fd.append('attachment', file);
+                 fd.append('text', text || (file.type.startsWith('audio') ? 'Voice Message' : 'Image'));
+                 fd.append('user', currentUser.id);
+                 fd.append('room', activeRoomId);
+                 fd.append('type', file.type.startsWith('audio') ? 'audio' : 'image');
+                 await pb.collection('messages').create(fd);
             } else {
                  await pb.collection('messages').create({ text, user: currentUser.id, room: activeRoomId });
             }
-
-            // BOT LOGIC
-            const lowerText = text.toLowerCase();
-            if (lowerText.includes('workigom') || lowerText.includes('@bot')) {
+            const lower = text.toLowerCase();
+            if (lower.includes('workigom') || lower.includes('@bot')) {
                  const history = allPublicMessages.slice(-5).map(m => `${usersMapRef.current.get(m.user)?.username}: ${m.text}`);
                  try {
                     const botResponse = await generateBotResponse(text, history);
-                    const botMsg: Message = { id: Math.random().toString(), collectionId: 'messages', collectionName: 'messages', created: new Date().toISOString(), updated: new Date().toISOString(), text: botResponse, user: 'bot_ai', room: activeRoomId, type: 'text' };
-                    setLocalMessages(prev => [...prev, botMsg]);
+                    setLocalMessages(prev => [...prev, { id: Math.random().toString(), text: botResponse, user: 'bot_ai', room: activeRoomId, created: new Date().toISOString() } as unknown as Message]);
                  } catch (e) {}
             }
         } catch (e) {}
-
     } else if (currentView.type === 'pm') {
-        const recipientId = currentView.userId;
         try {
-            const formData = new FormData();
-            formData.append('sender', currentUser.id);
-            formData.append('recipient', recipientId);
-            
+            const fd = new FormData();
+            fd.append('sender', currentUser.id);
+            fd.append('recipient', currentView.userId);
             if (file) {
-                formData.append('attachment', file);
-                formData.append('type', file.type.startsWith('audio') ? 'audio' : 'image');
-                formData.append('text', text || (file.type.startsWith('audio') ? 'Voice Message' : 'Image'));
+                fd.append('attachment', file);
+                fd.append('type', file.type.startsWith('audio') ? 'audio' : 'image');
+                fd.append('text', text || (file.type.startsWith('audio') ? 'Voice Message' : 'Image'));
             } else {
-                formData.append('text', text);
-                formData.append('type', 'text');
+                fd.append('text', text);
             }
-            await pb.collection('private_messages').create(formData);
-        } catch (e: any) { 
-             console.error("PM Send error", e); 
-             if (e.status === 403) {
-                 alert("Cannot send private message: Permission denied. Check API Rules.");
-                 setPmError(true);
-             }
-        }
+            await pb.collection('private_messages').create(fd);
+        } catch (e: any) { if (e.status === 403) setPmError(true); }
     }
-  };
-
-  const handleOpenPrivateChat = (user: User) => {
-      if (user.id === currentUser?.id) return;
-      if (!activePMs.find(u => u.id === user.id)) setActivePMs(prev => [...prev, user]);
-      
-      // Switch view to this user
-      setCurrentView({ type: 'pm', userId: user.id });
-      setUnreadPMs(prev => { const n = new Set(prev); n.delete(user.id); return n; });
-      setShowMobileUserList(false);
-  };
-
-  const closePMTab = (e: React.MouseEvent, userId: string) => {
-      e.stopPropagation();
-      setActivePMs(prev => prev.filter(u => u.id !== userId));
-      setUnreadPMs(prev => { const n = new Set(prev); n.delete(userId); return n; });
-      
-      // If we closed the active view, go back to room
-      if (currentView.type === 'pm' && currentView.userId === userId) {
-          setCurrentView({ type: 'room', id: activeRoomId || '' });
-      }
   };
 
   const switchToRoom = (room: Room) => {
       setActiveRoomId(room.id);
       setCurrentView({ type: 'room', id: room.id });
+      setShowRoomDropdown(false);
   };
 
   const switchToPM = (userId: string) => {
@@ -536,93 +333,27 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
       setShowTabOverflow(false);
   };
 
-  const createDefaultRoom = async () => {
-      if (!isModerator(currentUser)) return;
-      try {
-          const r = await pb.collection('rooms').create({ name: 'New Room', topic: 'Topic', isMuted: false });
-          setRooms(prev => [...prev, r as unknown as Room]);
-          switchToRoom(r as unknown as Room);
-      } catch(e) {}
-  };
-
-  const handleKickUser = async (user: User) => {
-    if (!currentUser || !isModerator(currentUser)) return;
-    if (!confirm(`Are you sure you want to kick ${user.username}?`)) return;
-    try {
-        await pb.collection('users').update(user.id, { isOnline: false });
-        if (activeRoomId) {
-             await pb.collection('messages').create({
-                 text: `*** ${user.username} was kicked by ${currentUser.username}`,
-                 room: activeRoomId,
-                 user: 'bot_ai',
-                 type: 'text'
-             });
-        }
-    } catch (e: any) {
-        alert("Kick failed: " + e.message);
-    }
-  };
-
-  const handleBanUser = async (user: User) => {
-    if (!currentUser || !isAdmin(currentUser)) return;
-    const action = user.banned ? "Unban" : "Ban";
-    if (!confirm(`Are you sure you want to ${action} ${user.username}?`)) return;
-    try {
-        await pb.collection('users').update(user.id, { banned: !user.banned });
-        if (activeRoomId) {
-             await pb.collection('messages').create({
-                 text: `*** ${user.username} was ${user.banned ? 'unbanned' : 'banned'} by ${currentUser.username}`,
-                 room: activeRoomId,
-                 user: 'bot_ai',
-                 type: 'text'
-             });
-        }
-    } catch (e: any) {
-        alert(`${action} failed: ` + e.message);
-    }
-  };
-
-  const handleToggleOp = async (user: User) => {
-    if (!currentUser || !isAdmin(currentUser)) return;
-    const isOp = user.role === UserRole.OPERATOR;
-    if (!confirm(`Are you sure you want to ${isOp ? "demote" : "promote"} ${user.username}?`)) return;
-    try {
-        const newRole = isOp ? UserRole.USER : UserRole.OPERATOR;
-        await pb.collection('users').update(user.id, { role: newRole });
-        if (activeRoomId) {
-             await pb.collection('messages').create({
-                 text: `*** ${user.username} is now ${newRole === UserRole.OPERATOR ? 'an Operator' : 'a User'}`,
-                 room: activeRoomId,
-                 user: 'bot_ai',
-                 type: 'text'
-             });
-        }
-    } catch (e: any) {
-        alert("Role change failed: " + e.message);
-    }
+  const closePMTab = (e: React.MouseEvent, userId: string) => {
+      e.stopPropagation();
+      setActivePMs(prev => prev.filter(u => u.id !== userId));
+      if (currentView.type === 'pm' && currentView.userId === userId) {
+          setCurrentView({ type: 'room', id: activeRoomId || '' });
+      }
   };
 
   // --- Render Helpers ---
   const MAX_VISIBLE_TABS = 4;
   const visiblePMs = activePMs.slice(0, MAX_VISIBLE_TABS);
   const overflowPMs = activePMs.slice(MAX_VISIBLE_TABS);
-
-  // Determine current user for header display
+  const messagesToShow = currentView.type === 'room' ? allPublicMessages : (privateMessages[currentView.userId] || []);
   const targetUserForHeader = currentView.type === 'pm' ? usersMap.get(currentView.userId) : null;
-
-  // Decide which messages to show
-  const messagesToShow = currentView.type === 'room' 
-      ? allPublicMessages 
-      : (privateMessages[currentView.userId] || []);
 
   return (
     <MIRCProvider pb={pb}>
       <div className={`flex flex-col h-[100dvh] w-full bg-mirc-darker text-gray-200 overflow-hidden ${className || ''}`}>
         {!currentUser ? (
-           /* LOGIN SCREEN (Unchanged from original essentially) */
            <div className="flex items-center justify-center h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
               <div className="bg-slate-800 p-6 md:p-8 rounded-2xl shadow-2xl border border-mirc-pink/30 w-[90%] md:w-96 text-center animate-in fade-in zoom-in duration-300">
-                  {/* ... Login Form ... */}
                   <div className="mb-6 flex justify-center"><div className="bg-mirc-pink p-4 rounded-full shadow-[0_0_20px_#f472b6]"><Bot size={48} className="text-white" /></div></div>
                   <h1 className="text-2xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-mirc-pink to-mirc-purple">WorkigomChat AI</h1>
                   <p className="text-sm text-gray-400 mb-6 font-mono">{authMode === 'login' ? 'Login' : 'Register'}</p>
@@ -638,140 +369,48 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
            </div>
         ) : (
           <>
-            {/* HEADER */}
             <header className="h-14 bg-slate-800/90 backdrop-blur-md border-b border-gray-700 flex items-center justify-between px-2 gap-2 sticky top-0 z-30 shrink-0">
-              
-              {/* Left: Logo & Room Selector */}
               <div className="flex items-center gap-3 shrink-0">
-                   <div className="w-9 h-9 bg-gradient-to-br from-mirc-pink to-purple-600 rounded-xl shadow-lg shadow-purple-500/20 flex items-center justify-center shrink-0 border border-white/10">
-                      <Command size={18} className="text-white" />
-                   </div>
-                   
-                   {/* Room Dropdown */}
-                   <div className="relative group z-50">
-                      <button className="flex items-center gap-3 px-3 py-1.5 md:px-4 md:py-2 bg-slate-800/50 hover:bg-slate-800 border border-slate-700 hover:border-mirc-cyan rounded-full transition-all duration-300 shadow-sm hover:shadow-mirc-cyan/20 group-hover:w-auto">
-                          <div className={`p-1.5 rounded-full shrink-0 transition-colors ${currentRoomObj?.isMuted ? 'bg-red-500/20 text-red-400' : 'bg-mirc-cyan/20 text-mirc-cyan'}`}>
-                              {currentRoomObj?.isMuted ? <LockKeyhole size={14} /> : <Hash size={14} />}
-                          </div>
-                          
+                   <div className="w-9 h-9 bg-gradient-to-br from-mirc-pink to-purple-600 rounded-xl shadow-lg shadow-purple-500/20 flex items-center justify-center border border-white/10"><Command size={18} className="text-white" /></div>
+                   <div className="relative z-50" ref={roomDropdownRef}>
+                      <button 
+                        onClick={() => setShowRoomDropdown(!showRoomDropdown)}
+                        className={`flex items-center gap-3 px-3 py-1.5 md:px-4 md:py-2 bg-slate-800/50 hover:bg-slate-800 border rounded-full transition-all duration-300 shadow-sm hover:shadow-mirc-cyan/20 ${showRoomDropdown ? 'border-mirc-cyan ring-1 ring-mirc-cyan/30' : 'border-slate-700'}`}
+                      >
+                          <div className={`p-1.5 rounded-full shrink-0 transition-colors ${currentRoomObj?.isMuted ? 'bg-red-500/20 text-red-400' : 'bg-mirc-cyan/20 text-mirc-cyan'}`}>{currentRoomObj?.isMuted ? <LockKeyhole size={14} /> : <Hash size={14} />}</div>
                           <div className="flex flex-col items-start text-left hidden md:flex">
-                              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider leading-none mb-0.5">Current Channel</span>
-                              <span className="text-sm font-bold text-gray-100 max-w-[100px] lg:max-w-[140px] truncate leading-none">{currentRoomObj?.name || 'Select Room'}</span>
+                              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider leading-none mb-0.5">Channel</span>
+                              <span className="text-sm font-bold text-gray-100 max-w-[100px] truncate leading-none">{currentRoomObj?.name || 'Rooms'}</span>
                           </div>
-                          <span className="md:hidden font-bold text-sm text-gray-100 max-w-[80px] truncate">{currentRoomObj?.name}</span>
-
-                          <ChevronDown size={14} className="text-gray-500 group-hover:text-white transition-colors ml-1" />
+                          <ChevronDown size={14} className={`transition-transform ${showRoomDropdown ? 'rotate-180 text-white' : 'text-gray-500'}`} />
                       </button>
-
-                      {/* Dropdown Menu */}
-                      <div className="absolute top-full left-0 mt-3 w-72 bg-slate-900/95 backdrop-blur-xl border border-gray-700/80 rounded-2xl shadow-2xl hidden group-hover:block animate-in fade-in slide-in-from-top-4 duration-200 overflow-hidden ring-1 ring-white/10 origin-top-left">
-                          <div className="px-5 py-3 bg-slate-950/80 border-b border-gray-800 flex justify-between items-center">
-                              <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Available Channels</h3>
-                              <span className="text-[10px] bg-slate-800 text-gray-500 px-1.5 py-0.5 rounded border border-slate-700">{rooms.length}</span>
-                          </div>
-                          
-                          <div className="max-h-[320px] overflow-y-auto custom-scrollbar p-2 space-y-1">
-                              {rooms.map(r => {
-                                  const isActive = activeRoomId === r.id;
-                                  return (
-                                      <button 
-                                          key={r.id} 
-                                          onClick={() => { switchToRoom(r); }} 
-                                          className={`w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-center gap-3 group/item relative overflow-hidden
-                                              ${isActive 
-                                                  ? 'bg-gradient-to-r from-mirc-pink/20 to-purple-500/10 border border-mirc-pink/30' 
-                                                  : 'hover:bg-white/5 border border-transparent hover:border-white/5'}
-                                          `}
-                                      >
-                                          <div className={`p-2 rounded-lg shrink-0 transition-colors ${isActive ? 'bg-mirc-pink text-white shadow-lg shadow-pink-500/30' : 'bg-slate-800 text-gray-500 group-hover/item:text-gray-300'}`}>
-                                              {r.isMuted ? <LockKeyhole size={16}/> : <Hash size={16} />}
-                                          </div>
-                                          <div className="flex-1 min-w-0 z-10">
-                                              <div className={`font-bold text-sm truncate ${isActive ? 'text-pink-100' : 'text-gray-300 group-hover/item:text-white'}`}>
-                                                  {r.name}
-                                              </div>
-                                              <div className="text-xs text-gray-600 truncate group-hover/item:text-gray-500 font-mono">
-                                                  {r.topic || 'No topic set'}
-                                              </div>
-                                          </div>
-                                          {isActive && <div className="absolute right-3 w-2 h-2 rounded-full bg-mirc-pink animate-pulse shadow-[0_0_8px_#f472b6]" />}
-                                      </button>
-                                  )
-                              })}
-                          </div>
-
-                          {isModerator(currentUser) && (
-                              <div className="p-3 border-t border-gray-800 bg-slate-950/50">
-                                  <button 
-                                      onClick={createDefaultRoom} 
-                                      className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-dashed border-gray-700 text-gray-500 hover:text-mirc-cyan hover:border-mirc-cyan/50 hover:bg-mirc-cyan/5 transition-all text-xs font-bold uppercase tracking-wide"
-                                  >
-                                      <Plus size={14} /> Create New Room
-                                  </button>
-                              </div>
-                          )}
-                      </div>
+                      {showRoomDropdown && (
+                        <div className="absolute top-full left-0 mt-3 w-72 bg-slate-900/95 backdrop-blur-xl border border-gray-700/80 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-top-4 duration-200 overflow-hidden ring-1 ring-white/10 origin-top-left z-[60]">
+                            <div className="px-5 py-3 bg-slate-950/80 border-b border-gray-800 flex justify-between items-center"><h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Channels</h3><span className="text-[10px] bg-slate-800 text-gray-500 px-1.5 py-0.5 rounded border border-slate-700">{rooms.length}</span></div>
+                            <div className="max-h-[320px] overflow-y-auto custom-scrollbar p-2 space-y-1">
+                                {rooms.map(r => (
+                                    <button key={r.id} onClick={() => switchToRoom(r)} className={`w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-center gap-3 group relative ${activeRoomId === r.id ? 'bg-gradient-to-r from-mirc-pink/20 to-purple-500/10 border border-mirc-pink/30' : 'hover:bg-white/5 border border-transparent'}`}>
+                                        <div className={`p-2 rounded-lg shrink-0 ${activeRoomId === r.id ? 'bg-mirc-pink text-white shadow-lg shadow-pink-500/30' : 'bg-slate-800 text-gray-500'}`}>{r.isMuted ? <LockKeyhole size={16}/> : <Hash size={16} />}</div>
+                                        <div className="flex-1 min-w-0"><div className={`font-bold text-sm truncate ${activeRoomId === r.id ? 'text-pink-100' : 'text-gray-300'}`}>{r.name}</div><div className="text-xs text-gray-600 truncate font-mono">{r.topic || 'No topic'}</div></div>
+                                        {activeRoomId === r.id && <div className="absolute right-3 w-2 h-2 rounded-full bg-mirc-pink animate-pulse" />}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                      )}
                    </div>
               </div>
 
-              {/* Center: PM Tabs */}
-              <div className="flex-1 flex items-center gap-1 overflow-x-auto scrollbar-hide mask-linear-fade">
-                  {visiblePMs.map(user => {
-                      const isActive = currentView.type === 'pm' && currentView.userId === user.id;
-                      const isUnread = unreadPMs.has(user.id);
-                      return (
-                          <div 
-                              key={user.id} 
-                              onClick={() => switchToPM(user.id)}
-                              className={`
-                                  group relative flex items-center gap-2 px-3 py-1.5 rounded-t-lg border-t border-x border-gray-700 cursor-pointer min-w-[100px] max-w-[150px]
-                                  ${isActive ? 'bg-slate-700 text-white border-b-slate-700 mb-[-1px] z-10' : 'bg-slate-900 text-gray-400 hover:bg-slate-800'}
-                                  ${isUnread ? 'animate-flash font-bold' : ''}
-                              `}
-                          >
-                              <div className="relative">
-                                  <img src={user.avatar || DEFAULT_AVATAR} className="w-4 h-4 rounded-full" />
-                                  <span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-slate-900 ${user.isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
-                              </div>
-                              <span className="text-xs truncate flex-1">{user.username}</span>
-                              <button 
-                                  onClick={(e) => closePMTab(e, user.id)}
-                                  className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-500 hover:text-white rounded-full transition-all"
-                              >
-                                  <X size={10} />
-                              </button>
-                          </div>
-                      )
-                  })}
-
-                  {/* Overflow Menu */}
-                  {overflowPMs.length > 0 && (
-                      <div className="relative">
-                          <button 
-                              onClick={() => setShowTabOverflow(!showTabOverflow)}
-                              className={`flex items-center gap-1 px-2 py-1.5 text-xs font-bold rounded ${unreadPMs.size > 0 ? 'text-mirc-pink animate-pulse' : 'text-gray-400 hover:text-white'}`}
-                          >
-                              <MessageCircle size={14} />
-                              +{overflowPMs.length}
-                          </button>
-                          {showTabOverflow && (
-                              <div className="absolute top-full right-0 mt-2 w-48 bg-slate-800 border border-gray-600 rounded-lg shadow-xl z-50">
-                                  {overflowPMs.map(u => (
-                                      <div key={u.id} onClick={() => switchToPM(u.id)} className="flex items-center justify-between px-3 py-2 hover:bg-white/5 cursor-pointer text-sm text-gray-300">
-                                          <div className="flex items-center gap-2">
-                                              <span className={`w-2 h-2 rounded-full ${unreadPMs.has(u.id) ? 'bg-mirc-pink animate-pulse' : 'bg-transparent'}`} />
-                                              {u.username}
-                                          </div>
-                                          <button onClick={(e) => closePMTab(e, u.id)} className="text-gray-500 hover:text-red-400"><X size={12}/></button>
-                                      </div>
-                                  ))}
-                              </div>
-                          )}
+              <div className="flex-1 flex items-center gap-1 overflow-x-auto scrollbar-hide">
+                  {visiblePMs.map(u => (
+                      <div key={u.id} onClick={() => switchToPM(u.id)} className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-t-lg border-t border-x border-gray-700 cursor-pointer min-w-[100px] max-w-[150px] ${currentView.type === 'pm' && currentView.userId === u.id ? 'bg-slate-700 text-white border-b-slate-700 mb-[-1px] z-10' : 'bg-slate-900 text-gray-400 hover:bg-slate-800'} ${unreadPMs.has(u.id) ? 'animate-flash' : ''}`}>
+                          <div className="relative"><img src={u.avatar || DEFAULT_AVATAR} className="w-4 h-4 rounded-full" /><span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-slate-900 ${u.isOnline ? 'bg-green-500' : 'bg-gray-500'}`} /></div>
+                          <span className="text-xs truncate flex-1">{u.username}</span>
+                          <button onClick={(e) => closePMTab(e, u.id)} className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-500 rounded-full transition-all"><X size={10} /></button>
                       </div>
-                  )}
+                  ))}
               </div>
 
-              {/* Right: Music & Profile */}
               <div className="flex-1 flex justify-end items-center gap-2 shrink-0">
                   <div className="hidden md:block"><MusicPlayer /></div>
                   <button onClick={() => setShowMobileUserList(!showMobileUserList)} className="md:hidden p-2 text-gray-400"><Users size={20}/></button>
@@ -779,71 +418,17 @@ const CuteMIRC: React.FC<CuteMIRCProps> = ({ pocketbaseUrl, className }) => {
               </div>
             </header>
             
-            {/* PM PERMISSION ERROR BANNER */}
-            {pmError && (
-                 <div className="bg-red-900/90 text-white text-xs px-2 py-1 text-center border-b border-red-500 animate-in slide-in-from-top-2 flex items-center justify-center gap-2">
-                     <AlertTriangle size={14} className="text-yellow-400" />
-                     <span>
-                        <b>Private Chat Error:</b> Access denied. Please set API Rules for <b>private_messages</b> (List/View/Create/Update) to: 
-                        <code className="bg-black/30 px-1 rounded ml-1 select-all">sender = @request.auth.id || recipient = @request.auth.id</code>
-                     </span>
-                 </div>
-            )}
-
-            {/* MAIN CONTENT AREA */}
             <div className="flex flex-1 overflow-hidden relative">
-              
-              {/* Chat Area */}
               <div className="flex-1 flex flex-col bg-slate-900/50 relative min-w-0 min-h-0 w-full">
-                  {/* Chat Header Info Bar */}
                   <div className="bg-slate-950/30 border-b border-gray-800 px-4 py-1 flex items-center justify-between text-xs text-gray-500 h-8 shrink-0">
-                      {currentView.type === 'room' ? (
-                          <span>Topic: {currentRoomObj?.topic || 'Welcome to the chat'} {currentRoomObj?.isMuted && <span className="text-red-400 ml-2 flex items-center gap-1 inline-flex"><LockKeyhole size={10}/> LOCKED</span>}</span>
-                      ) : (
-                          <div className="flex items-center gap-2 text-mirc-pink">
-                              <span className="font-bold">PRIVATE CHAT</span>
-                              <span className="text-gray-400">with {targetUserForHeader?.username}</span>
-                          </div>
-                      )}
-                      {realtimeError && <span className="text-red-500 flex items-center gap-1"><WifiOff size={10}/> Reconnecting...</span>}
+                      {currentView.type === 'room' ? (<span>Topic: {currentRoomObj?.topic || 'Lobby'}</span>) : (<div className="flex items-center gap-2 text-mirc-pink"><span className="font-bold">PRIVATE</span><span className="text-gray-400">{targetUserForHeader?.username}</span></div>)}
+                      {realtimeError && <span className="text-red-500 flex items-center gap-1"><WifiOff size={10}/></span>}
                   </div>
-
-                  <MessageList 
-                      messages={messagesToShow as Message[]} 
-                      currentUser={currentUser} 
-                      usersMap={usersMap} 
-                      isPrivate={currentView.type === 'pm'}
-                  />
-                  
-                  <ChatInput 
-                      onSendMessage={handleSendMessage} 
-                      allowAttachments={true} 
-                      disabled={currentView.type === 'room' && currentRoomObj?.isMuted && !isModerator(currentUser)} 
-                      isLocked={currentView.type === 'room' && currentRoomObj?.isMuted} 
-                  />
+                  <MessageList messages={messagesToShow as Message[]} currentUser={currentUser} usersMap={usersMap} isPrivate={currentView.type === 'pm'} />
+                  <ChatInput onSendMessage={handleSendMessage} allowAttachments={currentView.type === 'pm'} disabled={currentView.type === 'room' && currentRoomObj?.isMuted && !isModerator(currentUser)} isLocked={currentView.type === 'room' && currentRoomObj?.isMuted} />
               </div>
-
-              {/* Sidebar (User List) */}
-              <div className={`
-                  fixed inset-y-0 right-0 z-40 bg-mirc-dark border-l border-gray-700 transition-transform duration-300 shadow-2xl md:shadow-none
-                  ${showMobileUserList ? 'translate-x-0' : 'translate-x-full'}
-                  md:relative md:translate-x-0 md:block md:static h-full
-              `}>
-                   <div className="md:hidden absolute top-2 right-2 z-50">
-                      <button onClick={() => setShowMobileUserList(false)} className="p-1 text-gray-400 hover:text-white"><X size={18} /></button>
-                  </div>
-                  <UserList 
-                      users={users} 
-                      currentUserId={currentUser.id}
-                      onOpenPrivateChat={handleOpenPrivateChat} 
-                      currentUserRole={currentUser.role}
-                      // Pass handlers mostly relevant for room moderation
-                      onKick={handleKickUser}
-                      onBan={handleBanUser}
-                      onToggleOp={handleToggleOp}
-                      onRefresh={fetchUsers}
-                      permissionError={permissionError}
-                  />
+              <div className={`fixed inset-y-0 right-0 z-40 bg-mirc-dark border-l border-gray-700 transition-transform duration-300 md:relative md:translate-x-0 md:block h-full ${showMobileUserList ? 'translate-x-0' : 'translate-x-full'}`}>
+                  <UserList users={users} currentUserId={currentUser.id} onOpenPrivateChat={(u) => { if (!activePMs.find(p=>p.id===u.id)) setActivePMs(prev=>[...prev, u]); switchToPM(u.id); }} currentUserRole={currentUser.role} onRefresh={fetchUsers} permissionError={permissionError} />
               </div>
             </div>
           </>
