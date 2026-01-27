@@ -64,7 +64,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, currentUser, usersM
     contentElements = replaceWithTag(contentElements, /(\*\*[^\*]+\*\*)/g, (match, i) => (
         <span key={`b-${i}`} className="font-bold">{match.slice(2, -2)}</span>
     ));
-    // Italic: *text* (must not be double star)
+    // Italic: *text* 
     contentElements = replaceWithTag(contentElements, /(\*[^\*]+\*)/g, (match, i) => (
         <span key={`i-${i}`} className="italic">{match.slice(1, -1)}</span>
     ));
