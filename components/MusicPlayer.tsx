@@ -20,7 +20,8 @@ const MusicPlayer: React.FC = () => {
   const getTrackSource = (track: any): string => {
       if (!track) return "";
       if (track.audio_file) {
-          return pb.files.getURL(track, track.audio_file);
+          // Fixed: getURL -> getUrl (PocketBase SDK 0.8+)
+          return pb.files.getUrl(track, track.audio_file);
       }
       if (track.url) {
           return track.url;
@@ -45,9 +46,11 @@ const MusicPlayer: React.FC = () => {
                 setAudioUrl(getTrackSource(firstTrack));
             } else {
                 setCurrentTrack("Liste Boş");
+                setAudioUrl(""); 
             }
         } catch (err) {
             console.log("Music fetch error", err);
+            setCurrentTrack("Hata");
         }
     };
     fetchTracks();
@@ -65,12 +68,19 @@ const MusicPlayer: React.FC = () => {
       const audio = audioRef.current;
       if (!audio) return;
 
+      if (!audioUrl) {
+          // If no URL, we cannot play.
+          setError(true);
+          return;
+      }
+
       if (isPlaying) {
           audio.pause();
           setIsPlaying(false);
       } else {
           setError(false);
           setIsLoading(true);
+          
           const promise = audio.play();
           
           if (promise !== undefined) {
@@ -83,8 +93,13 @@ const MusicPlayer: React.FC = () => {
                   console.warn("Play blocked:", e);
                   setIsPlaying(false);
                   setIsLoading(false);
-                  // Opera/Mobile: Usually means we need a user gesture again.
-                  // Just leave it paused, user will click again.
+                  
+                  // Handle "NotSupportedError" which happens if src is empty or invalid format
+                  if (e.name === 'NotSupportedError' || e.message.includes('source')) {
+                      setError(true);
+                      // Try moving to next track automatically if current is broken? 
+                      // Maybe not, just show error state.
+                  }
               });
           }
       }
@@ -104,13 +119,17 @@ const MusicPlayer: React.FC = () => {
       setIsPlaying(false); 
       setError(false);
       
-      // Attempt autoplay, but if browser blocks it, UI remains paused
+      // Small delay to allow state update and DOM to register new src
       setTimeout(() => {
-          if (audioRef.current) {
+          if (audioRef.current && nextUrl) {
               const p = audioRef.current.play();
               if (p) {
                   p.then(() => setIsPlaying(true))
-                   .catch(() => setIsPlaying(false)); // Silent fail, wait for user
+                   .catch((e) => {
+                       console.warn("Autoplay next failed:", e);
+                       setIsPlaying(false);
+                       if (e.name === 'NotSupportedError') setError(true);
+                   });
               }
           }
       }, 200);
@@ -119,6 +138,7 @@ const MusicPlayer: React.FC = () => {
 
   const handleError = () => {
       if (audioUrl) {
+          console.error("Audio Load Error for URL:", audioUrl);
           setError(true);
           setIsPlaying(false);
           setIsLoading(false);
@@ -174,7 +194,8 @@ const MusicPlayer: React.FC = () => {
 
         <button 
           onClick={togglePlay}
-          className={`p-1.5 md:p-1.5 rounded-full text-white transition-all shadow-md active:scale-95 ${isPlaying ? 'bg-pink-500 hover:bg-pink-600' : 'bg-gray-600 hover:bg-gray-500'}`}
+          disabled={!audioUrl}
+          className={`p-1.5 md:p-1.5 rounded-full text-white transition-all shadow-md active:scale-95 ${!audioUrl ? 'opacity-50 cursor-not-allowed bg-gray-700' : (isPlaying ? 'bg-pink-500 hover:bg-pink-600' : 'bg-gray-600 hover:bg-gray-500')}`}
         >
           {error ? <RotateCcw size={14} /> : (isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" />)}
         </button>
