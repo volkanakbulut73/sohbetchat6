@@ -20,7 +20,6 @@ const MusicPlayer: React.FC = () => {
   const getTrackSource = (track: any): string => {
       if (!track) return "";
       if (track.audio_file) {
-          // Fixed: getURL -> getUrl (PocketBase SDK 0.8+)
           return pb.files.getUrl(track, track.audio_file);
       }
       if (track.url) {
@@ -39,7 +38,6 @@ const MusicPlayer: React.FC = () => {
             });
             if (records && records.length > 0) {
                 setTrackList(records);
-                // Pre-load first track info but DO NOT set src yet to avoid auto-download
                 const firstTrack = records[0];
                 setCurrentTrack(firstTrack.title || "Müzik");
                 setCurrentIndex(0);
@@ -63,45 +61,62 @@ const MusicPlayer: React.FC = () => {
     }
   }, [isMuted]);
 
+  // Safe Play Function used internally
+  const safePlay = async () => {
+      const audio = audioRef.current;
+      if (!audio || !audioUrl) return;
+
+      try {
+          setIsLoading(true);
+          setError(false);
+          
+          const playPromise = audio.play();
+          
+          if (playPromise !== undefined) {
+              await playPromise;
+              // If we get here, playback started successfully
+              setIsPlaying(true);
+              setIsLoading(false);
+          }
+      } catch (err: any) {
+          setIsLoading(false);
+          // AbortError is expected if the user pauses immediately after playing (interrupts the load)
+          if (err.name === 'AbortError') {
+              console.debug("Playback aborted by user action.");
+              setIsPlaying(false);
+          } else if (err.name === 'NotSupportedError' || err.message.includes('source')) {
+              console.warn("Media not supported or no source.");
+              setError(true);
+              setIsPlaying(false);
+          } else {
+              console.error("Playback error:", err);
+              // Don't show error for NotAllowedError (interaction policy) as it confuses users
+              if (err.name !== 'NotAllowedError') {
+                 setError(true);
+              }
+              setIsPlaying(false);
+          }
+      }
+  };
+
   // Unified Play Logic
   const togglePlay = () => {
       const audio = audioRef.current;
       if (!audio) return;
 
       if (!audioUrl) {
-          // If no URL, we cannot play.
           setError(true);
           return;
       }
 
-      if (isPlaying) {
+      if (audio.paused) {
+          // It is paused, so we try to play
+          safePlay();
+      } else {
+          // It is playing, so we pause
           audio.pause();
           setIsPlaying(false);
-      } else {
-          setError(false);
-          setIsLoading(true);
-          
-          const promise = audio.play();
-          
-          if (promise !== undefined) {
-              promise
-              .then(() => {
-                  setIsPlaying(true);
-                  setIsLoading(false);
-              })
-              .catch((e) => {
-                  console.warn("Play blocked:", e);
-                  setIsPlaying(false);
-                  setIsLoading(false);
-                  
-                  // Handle "NotSupportedError" which happens if src is empty or invalid format
-                  if (e.name === 'NotSupportedError' || e.message.includes('source')) {
-                      setError(true);
-                      // Try moving to next track automatically if current is broken? 
-                      // Maybe not, just show error state.
-                  }
-              });
-          }
+          setIsLoading(false);
       }
   };
 
@@ -119,18 +134,10 @@ const MusicPlayer: React.FC = () => {
       setIsPlaying(false); 
       setError(false);
       
-      // Small delay to allow state update and DOM to register new src
+      // Allow state to update, then attempt play
       setTimeout(() => {
           if (audioRef.current && nextUrl) {
-              const p = audioRef.current.play();
-              if (p) {
-                  p.then(() => setIsPlaying(true))
-                   .catch((e) => {
-                       console.warn("Autoplay next failed:", e);
-                       setIsPlaying(false);
-                       if (e.name === 'NotSupportedError') setError(true);
-                   });
-              }
+             safePlay();
           }
       }, 200);
     }
@@ -138,7 +145,8 @@ const MusicPlayer: React.FC = () => {
 
   const handleError = () => {
       if (audioUrl) {
-          console.error("Audio Load Error for URL:", audioUrl);
+          // Only log real errors, not empty src errors during initialization
+          console.error("Audio tag onError triggered for:", audioUrl);
           setError(true);
           setIsPlaying(false);
           setIsLoading(false);
