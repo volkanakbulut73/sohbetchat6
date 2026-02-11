@@ -14,8 +14,11 @@ const MusicPlayer: React.FC = () => {
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [skipMessage, setSkipMessage] = useState<string>("");
   
   const audioRef = useRef<HTMLAudioElement>(null);
+  const consecutiveErrors = useRef(0);
+  const skipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getTrackSource = (track: any): string => {
       if (!track) return "";
@@ -26,6 +29,33 @@ const MusicPlayer: React.FC = () => {
           return track.url;
       }
       return "";
+  };
+
+  // Helper to trigger the next track when an error occurs
+  const triggerAutoSkip = (errorType: string) => {
+      if (trackList.length <= 1) {
+          setError(true);
+          setSkipMessage("Yayın Bulunamadı");
+          return;
+      }
+
+      setError(true);
+      setIsPlaying(false);
+      setIsLoading(false);
+
+      if (consecutiveErrors.current < 3) {
+          consecutiveErrors.current += 1;
+          const waitTime = 1500;
+          setSkipMessage(`Bağlantı Sorunu... Geçiliyor...`);
+          
+          if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
+          skipTimeoutRef.current = setTimeout(() => {
+              handleNext();
+          }, waitTime);
+      } else {
+          setSkipMessage("Çok fazla hata.");
+          consecutiveErrors.current = 0; // Reset after a while or stop
+      }
   };
 
   // Initial Fetch
@@ -52,6 +82,10 @@ const MusicPlayer: React.FC = () => {
         }
     };
     fetchTracks();
+    
+    return () => {
+        if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
+    };
   }, [pb]);
 
   // Sync Mute
@@ -69,30 +103,28 @@ const MusicPlayer: React.FC = () => {
       try {
           setIsLoading(true);
           setError(false);
+          setSkipMessage("");
           
           const playPromise = audio.play();
           
           if (playPromise !== undefined) {
               await playPromise;
-              // If we get here, playback started successfully
               setIsPlaying(true);
               setIsLoading(false);
+              consecutiveErrors.current = 0;
           }
       } catch (err: any) {
           setIsLoading(false);
-          // AbortError is expected if the user pauses immediately after playing (interrupts the load)
           if (err.name === 'AbortError') {
-              console.debug("Playback aborted by user action.");
+              // Ignore intentional interruptions
               setIsPlaying(false);
-          } else if (err.name === 'NotSupportedError' || err.message.includes('source')) {
-              console.warn("Media not supported or no source.");
-              setError(true);
-              setIsPlaying(false);
+          } else if (err.name === 'NotSupportedError' || err.message.toLowerCase().includes('source') || err.message.toLowerCase().includes('supported')) {
+              // This often happens with SSL/CORS/Format issues
+              triggerAutoSkip("NotSupported");
           } else {
-              console.error("Playback error:", err);
-              // Don't show error for NotAllowedError (interaction policy) as it confuses users
+              // Other playback errors (like NotAllowedError if user hasn't clicked yet)
               if (err.name !== 'NotAllowedError') {
-                 setError(true);
+                 triggerAutoSkip("GeneralError");
               }
               setIsPlaying(false);
           }
@@ -110,18 +142,23 @@ const MusicPlayer: React.FC = () => {
       }
 
       if (audio.paused) {
-          // It is paused, so we try to play
           safePlay();
       } else {
-          // It is playing, so we pause
           audio.pause();
           setIsPlaying(false);
           setIsLoading(false);
+          if (skipTimeoutRef.current) {
+              clearTimeout(skipTimeoutRef.current);
+              setSkipMessage("");
+          }
       }
   };
 
   const handleNext = () => {
     if (trackList && trackList.length > 0) {
+      if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
+      setSkipMessage("");
+
       const nextIndex = (currentIndex + 1) % trackList.length;
       const nextTrack = trackList[nextIndex];
       
@@ -134,22 +171,19 @@ const MusicPlayer: React.FC = () => {
       setIsPlaying(false); 
       setError(false);
       
-      // Allow state to update, then attempt play
+      // Delay slightly to allow the <audio> tag src to update
       setTimeout(() => {
           if (audioRef.current && nextUrl) {
              safePlay();
           }
-      }, 200);
+      }, 300);
     }
   };
 
-  const handleError = () => {
-      if (audioUrl) {
-          // Only log real errors, not empty src errors during initialization
-          console.error("Audio tag onError triggered for:", audioUrl);
-          setError(true);
-          setIsPlaying(false);
-          setIsLoading(false);
+  const handleError = (e: any) => {
+      // If safePlay already caught a specific error, this might be redundant but safe
+      if (audioUrl && !isPlaying) {
+          triggerAutoSkip("NativeOnError");
       }
   };
 
@@ -163,7 +197,7 @@ const MusicPlayer: React.FC = () => {
         src={audioUrl} 
         onEnded={handleNext} 
         onPause={() => setIsPlaying(false)}
-        onPlay={() => { setIsPlaying(true); setError(false); setIsLoading(false); }}
+        onPlay={() => { setIsPlaying(true); setError(false); setIsLoading(false); consecutiveErrors.current = 0; }}
         onWaiting={() => setIsLoading(true)}
         onCanPlay={() => setIsLoading(false)}
         onError={handleError}
@@ -186,7 +220,7 @@ const MusicPlayer: React.FC = () => {
           <div className="relative overflow-hidden h-4 md:h-5 w-full">
              <div className={`whitespace-nowrap ${isPlaying && !error && !isLoading ? 'animate-marquee' : 'truncate'}`}>
                 <span className={`text-xs md:text-sm font-mono ${error ? 'text-red-300 font-bold' : 'text-pink-400'}`}>
-                    {error ? "Hata! Geç" : currentTrack}
+                    {skipMessage ? skipMessage : (error ? "Yayın Hatası" : currentTrack)}
                 </span>
              </div>
           </div>
