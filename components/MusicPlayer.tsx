@@ -19,6 +19,7 @@ const MusicPlayer: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const consecutiveErrors = useRef(0);
   const skipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getTrackSource = (track: any): string => {
       if (!track) return "";
@@ -33,6 +34,8 @@ const MusicPlayer: React.FC = () => {
 
   // Helper to trigger the next track when an error occurs
   const triggerAutoSkip = (errorType: string) => {
+      console.warn(`Radio Error [${errorType}]: Skipping track ${currentTrack}`);
+      
       if (trackList.length <= 1) {
           setError(true);
           setSkipMessage("Yayın Bulunamadı");
@@ -42,11 +45,12 @@ const MusicPlayer: React.FC = () => {
       setError(true);
       setIsPlaying(false);
       setIsLoading(false);
+      clearWatchdog();
 
-      if (consecutiveErrors.current < 3) {
+      if (consecutiveErrors.current < 5) {
           consecutiveErrors.current += 1;
-          const waitTime = 1500;
-          setSkipMessage(`Bağlantı Sorunu... Geçiliyor...`);
+          const waitTime = 1200; // Faster skip for better UX
+          setSkipMessage(`Bağlantı Hatası... Geçiliyor...`);
           
           if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
           skipTimeoutRef.current = setTimeout(() => {
@@ -54,8 +58,25 @@ const MusicPlayer: React.FC = () => {
           }, waitTime);
       } else {
           setSkipMessage("Çok fazla hata.");
-          consecutiveErrors.current = 0; // Reset after a while or stop
+          consecutiveErrors.current = 0; 
       }
+  };
+
+  const clearWatchdog = () => {
+      if (loadWatchdogRef.current) {
+          clearTimeout(loadWatchdogRef.current);
+          loadWatchdogRef.current = null;
+      }
+  };
+
+  const startWatchdog = () => {
+      clearWatchdog();
+      // If loading takes more than 6 seconds, it's likely a blocked IP or SSL error
+      loadWatchdogRef.current = setTimeout(() => {
+          if (isLoading && !isPlaying) {
+              triggerAutoSkip("LoadingTimeout (SSL/Blocked)");
+          }
+      }, 6000);
   };
 
   // Initial Fetch
@@ -77,7 +98,7 @@ const MusicPlayer: React.FC = () => {
                 setAudioUrl(""); 
             }
         } catch (err) {
-            console.log("Music fetch error", err);
+            console.error("Music fetch error", err);
             setCurrentTrack("Hata");
         }
     };
@@ -85,6 +106,7 @@ const MusicPlayer: React.FC = () => {
     
     return () => {
         if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
+        clearWatchdog();
     };
   }, [pb]);
 
@@ -104,6 +126,7 @@ const MusicPlayer: React.FC = () => {
           setIsLoading(true);
           setError(false);
           setSkipMessage("");
+          startWatchdog();
           
           const playPromise = audio.play();
           
@@ -111,20 +134,19 @@ const MusicPlayer: React.FC = () => {
               await playPromise;
               setIsPlaying(true);
               setIsLoading(false);
+              clearWatchdog();
               consecutiveErrors.current = 0;
           }
       } catch (err: any) {
           setIsLoading(false);
           if (err.name === 'AbortError') {
-              // Ignore intentional interruptions
               setIsPlaying(false);
+              clearWatchdog();
           } else if (err.name === 'NotSupportedError' || err.message.toLowerCase().includes('source') || err.message.toLowerCase().includes('supported')) {
-              // This often happens with SSL/CORS/Format issues
-              triggerAutoSkip("NotSupported");
+              triggerAutoSkip("NotSupported/SSL");
           } else {
-              // Other playback errors (like NotAllowedError if user hasn't clicked yet)
               if (err.name !== 'NotAllowedError') {
-                 triggerAutoSkip("GeneralError");
+                 triggerAutoSkip("GeneralPlaybackError");
               }
               setIsPlaying(false);
           }
@@ -147,6 +169,7 @@ const MusicPlayer: React.FC = () => {
           audio.pause();
           setIsPlaying(false);
           setIsLoading(false);
+          clearWatchdog();
           if (skipTimeoutRef.current) {
               clearTimeout(skipTimeoutRef.current);
               setSkipMessage("");
@@ -157,6 +180,7 @@ const MusicPlayer: React.FC = () => {
   const handleNext = () => {
     if (trackList && trackList.length > 0) {
       if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
+      clearWatchdog();
       setSkipMessage("");
 
       const nextIndex = (currentIndex + 1) % trackList.length;
@@ -170,6 +194,7 @@ const MusicPlayer: React.FC = () => {
       
       setIsPlaying(false); 
       setError(false);
+      setIsLoading(false);
       
       // Delay slightly to allow the <audio> tag src to update
       setTimeout(() => {
@@ -181,9 +206,9 @@ const MusicPlayer: React.FC = () => {
   };
 
   const handleError = (e: any) => {
-      // If safePlay already caught a specific error, this might be redundant but safe
-      if (audioUrl && !isPlaying) {
-          triggerAutoSkip("NativeOnError");
+      // Native audio error events (like 404s or network disconnects)
+      if (audioUrl) {
+          triggerAutoSkip("NativeAudioError");
       }
   };
 
@@ -197,7 +222,7 @@ const MusicPlayer: React.FC = () => {
         src={audioUrl} 
         onEnded={handleNext} 
         onPause={() => setIsPlaying(false)}
-        onPlay={() => { setIsPlaying(true); setError(false); setIsLoading(false); consecutiveErrors.current = 0; }}
+        onPlay={() => { setIsPlaying(true); setError(false); setIsLoading(false); clearWatchdog(); consecutiveErrors.current = 0; }}
         onWaiting={() => setIsLoading(true)}
         onCanPlay={() => setIsLoading(false)}
         onError={handleError}
@@ -210,17 +235,17 @@ const MusicPlayer: React.FC = () => {
         {isLoading ? (
              <Loader2 size={16} className="animate-spin text-mirc-pink shrink-0" />
         ) : error ? (
-            <AlertCircle size={16} className="text-red-400 shrink-0" />
+            <AlertCircle size={16} className="text-red-400 shrink-0 animate-pulse" />
         ) : (
-            <Radio size={16} className={`shrink-0 ${isPlaying ? "animate-pulse text-mirc-pink" : ""}`} />
+            <Radio size={16} className={`shrink-0 ${isPlaying ? "animate-pulse text-mirc-pink" : "text-gray-500"}`} />
         )}
         
         <div className="flex flex-col overflow-hidden w-20 md:w-32">
           <span className="text-[8px] md:text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-none hidden md:block">mIRC RADIO</span>
           <div className="relative overflow-hidden h-4 md:h-5 w-full">
              <div className={`whitespace-nowrap ${isPlaying && !error && !isLoading ? 'animate-marquee' : 'truncate'}`}>
-                <span className={`text-xs md:text-sm font-mono ${error ? 'text-red-300 font-bold' : 'text-pink-400'}`}>
-                    {skipMessage ? skipMessage : (error ? "Yayın Hatası" : currentTrack)}
+                <span className={`text-xs md:text-sm font-mono ${error ? 'text-red-300 font-bold' : (isLoading ? 'text-yellow-400' : 'text-pink-400')}`}>
+                    {skipMessage ? skipMessage : (error ? "Bağlantı Hatası" : currentTrack)}
                 </span>
              </div>
           </div>
@@ -236,13 +261,17 @@ const MusicPlayer: React.FC = () => {
 
         <button 
           onClick={togglePlay}
-          disabled={!audioUrl}
-          className={`p-1.5 md:p-1.5 rounded-full text-white transition-all shadow-md active:scale-95 ${!audioUrl ? 'opacity-50 cursor-not-allowed bg-gray-700' : (isPlaying ? 'bg-pink-500 hover:bg-pink-600' : 'bg-gray-600 hover:bg-gray-500')}`}
+          disabled={!audioUrl || isLoading}
+          className={`p-1.5 md:p-1.5 rounded-full text-white transition-all shadow-md active:scale-95 ${(!audioUrl || isLoading) ? 'opacity-50 cursor-wait bg-gray-700' : (isPlaying ? 'bg-pink-500 hover:bg-pink-600' : 'bg-gray-600 hover:bg-gray-500')}`}
         >
-          {error ? <RotateCcw size={14} /> : (isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" />)}
+          {isLoading ? <Loader2 size={14} className="animate-spin" /> : (error ? <RotateCcw size={14} /> : (isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" />))}
         </button>
 
-        <button onClick={handleNext} className="text-gray-400 hover:text-cyan-400 transition-colors p-1">
+        <button 
+            onClick={handleNext} 
+            className={`transition-colors p-1 ${error ? 'text-white animate-bounce' : 'text-gray-400 hover:text-cyan-400'}`}
+            title="Sıradaki Kanal"
+        >
           <SkipForward size={16} />
         </button>
       </div>
